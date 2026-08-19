@@ -5,16 +5,18 @@ resume_parser.py e mensagem.py. Detecta automaticamente qual provedor está
 disponível (dá preferência ao Gemini, que é gratuito) e expõe uma função simples
 `chamar_ia(prompt)` que os outros módulos usam sem se preocupar com qual provedor
 está por trás.
+
+Se uma chamada falhar, o motivo real fica disponível em `ultimo_erro` (uma string
+curta), para que o script consiga te avisar o que aconteceu de verdade, em vez de
+simplesmente cair pro modo sem IA sem explicação.
 """
 
 import os
 import json
-import time
-import ast
 
 import requests
 
-GEMINI_MODEL = "gemini-3.7-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
@@ -22,50 +24,59 @@ ultimo_erro: str | None = None
 
 
 def provedor_disponivel() -> str | None:
-    if any(k.startswith("GEMINI_API_KEY") for k in os.environ):
+    """Retorna "gemini", "claude" ou None, conforme as chaves de API configuradas.
+    Prioriza o Gemini por ser gratuito."""
+    if os.environ.get("GEMINI_API_KEY"):
         return "gemini"
     if os.environ.get("ANTHROPIC_API_KEY"):
         return "claude"
     return None
 
 
-def _chamar_gemini(prompt: str, max_tokens: int, json_mode: bool) -> str | None:
+def _post_gemini(chave: str, corpo: dict) -> requests.Response | None:
     global ultimo_erro
-    
-    chaves = [v.strip() for k, v in os.environ.items() if k.startswith("GEMINI_API_KEY") and v.strip()]
-    if not chaves:
-        ultimo_erro = "Nenhuma chave Gemini encontrada no .env."
+    try:
+        return requests.post(
+            GEMINI_URL,
+            headers={"x-goog-api-key": chave, "Content-Type": "application/json"},
+            json=corpo,
+            timeout=60,
+        )
+    except requests.RequestException as erro:
+        ultimo_erro = f"Falha de rede ao chamar o Gemini: {erro}"
         return None
 
+
+def _chamar_gemini(prompt: str, max_tokens: int, json_mode: bool) -> str | None:
+    global ultimo_erro
+    chave = os.environ["GEMINI_API_KEY"]
     corpo = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 4096},
+        "generationConfig": {"maxOutputTokens": max_tokens},
     }
+    if json_mode:
+        corpo["generationConfig"]["responseMimeType"] = "application/json"
+        # Desativa o "raciocínio interno" para tarefas de extração/classificação
+        # estruturada: elas não precisam de raciocínio profundo, e o raciocínio
+        # consome parte do limite de tokens antes da resposta final, o que pode
+        # cortar o JSON no meio (erro "Unterminated string"). O nome do parâmetro
+        # mudou entre gerações do Gemini (2.5 usa "thinkingBudget", 3.x usa
+        # "thinkingLevel") — tentamos o formato atual e, se o modelo rejeitar
+        # esse parâmetro (HTTP 400), tentamos de novo sem ele, para não depender
+        # de acompanhar cada mudança de API manualmente.
+        corpo["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
 
-    max_tentativas = 10
-    for tentativa in range(max_tentativas):
-        chave_atual = chaves[tentativa % len(chaves)]
-        
-        try:
-            resposta = requests.post(
-                GEMINI_URL,
-                headers={"x-goog-api-key": chave_atual, "Content-Type": "application/json"},
-                json=corpo,
-                timeout=60,
-            )
-        except requests.RequestException as erro:
-            ultimo_erro = f"Falha de rede ao chamar o Gemini: {erro}"
-            time.sleep(1)
-            continue
+    resposta = _post_gemini(chave, corpo)
+    if resposta is None:
+        return None
 
-        if resposta.ok:
-            break
-            
-        if resposta.status_code in (503, 429) and tentativa < max_tentativas - 1:
-            # Removido o print poluente daqui. Agora o script tenta a próxima chave silenciosamente.
-            time.sleep(1.5)
-            continue
-            
+    if not resposta.ok and "thinking" in resposta.text.lower():
+        corpo["generationConfig"].pop("thinkingConfig", None)
+        resposta = _post_gemini(chave, corpo)
+        if resposta is None:
+            return None
+
+    if not resposta.ok:
         detalhe = ""
         try:
             detalhe = resposta.json().get("error", {}).get("message", "")
@@ -81,18 +92,26 @@ def _chamar_gemini(prompt: str, max_tokens: int, json_mode: bool) -> str | None:
             motivo_bloqueio = dados.get("promptFeedback", {}).get("blockReason", "")
             ultimo_erro = f"Gemini não retornou candidatos na resposta.{(' Motivo: ' + motivo_bloqueio) if motivo_bloqueio else ''}"
             return None
-        
         finish_reason = candidatos[0].get("finishReason", "")
         partes = candidatos[0].get("content", {}).get("parts")
         if not partes:
             ultimo_erro = f"Gemini retornou resposta sem conteúdo de texto (finishReason={finish_reason})."
             return None
-        
-        texto = "".join(parte.get("text", "") for parte in partes)
-        
+        # O Gemini 3.6 Flash usa "thinking" por padrão e pode devolver várias partes:
+        # um bloco de raciocínio interno (marcado com "thought": true) seguido da
+        # resposta final. Pegar só partes[0] pode pegar o raciocínio (vazio de
+        # conteúdo útil) em vez da resposta — por isso juntamos todas as partes que
+        # NÃO são raciocínio interno.
+        texto = "".join(p.get("text", "") for p in partes if isinstance(p, dict) and not p.get("thought"))
+        if not texto.strip():
+            ultimo_erro = f"Gemini retornou só raciocínio interno, sem resposta final (finishReason={finish_reason})."
+            return None
         if finish_reason == "MAX_TOKENS":
-            ultimo_erro = "Gemini cortou a resposta por exceder o limite de tokens (finishReason=MAX_TOKENS)."
-            
+            # Resposta cortada no meio — inútil para JSON (fica malformado) e
+            # arriscado mesmo em texto livre. Melhor falhar aqui com uma mensagem
+            # clara do que deixar o chamador tentar interpretar algo truncado.
+            ultimo_erro = "Gemini cortou a resposta por exceder o limite de tokens (finishReason=MAX_TOKENS). Tente novamente ou aumente max_tokens."
+            return None
         return texto
     except (KeyError, IndexError, ValueError) as erro:
         ultimo_erro = f"Resposta do Gemini em formato inesperado: {erro}"
@@ -122,6 +141,10 @@ def _chamar_claude(prompt: str, max_tokens: int, json_mode: bool) -> str | None:
 
 
 def chamar_ia(prompt: str, max_tokens: int = 1500, json_mode: bool = False) -> str | None:
+    """Chama o provedor de IA disponível (Gemini ou Claude) com o prompt informado.
+    Retorna o texto da resposta, ou None se nenhum provedor estiver configurado ou
+    se a chamada falhar por qualquer motivo (rede, cota excedida, etc.) — nesse
+    caso, o motivo detalhado fica disponível em `ia.ultimo_erro`."""
     global ultimo_erro
     ultimo_erro = None
     provedor = provedor_disponivel()
@@ -134,32 +157,16 @@ def chamar_ia(prompt: str, max_tokens: int = 1500, json_mode: bool = False) -> s
 
 
 def chamar_ia_json(prompt: str, max_tokens: int = 1500) -> dict | list | None:
+    """Atalho para chamadas que esperam uma resposta em JSON já decodificada.
+    Retorna None se não houver provedor disponível, se a chamada falhar, ou se o
+    parsing do JSON falhar (nesse último caso, `ia.ultimo_erro` também é preenchido)."""
     global ultimo_erro
-    max_tentativas_json = 3
-    
-    for tentativa in range(max_tentativas_json):
-        texto = chamar_ia(prompt, max_tokens=max_tokens, json_mode=True)
-        if not texto:
-            return None
-            
-        try:
-            texto_limpo = texto.replace("```json", "").replace("```", "").strip()
-            return json.loads(texto_limpo, strict=False)
-            
-        except json.JSONDecodeError as erro:
-            try:
-                texto_py = texto_limpo.replace("null", "None").replace("true", "True").replace("false", "False")
-                resultado = ast.literal_eval(texto_py)
-                if isinstance(resultado, (dict, list)):
-                    return resultado
-            except Exception:
-                pass 
-            
-            texto_debug = texto_limpo.replace("\n", " ")[:150]
-            ultimo_erro = f"JSON inválido ({erro}). Trecho recebido: {texto_debug}..."
-            
-            if tentativa < max_tentativas_json - 1:
-                time.sleep(1)
-                continue
-                
-    return None
+    texto = chamar_ia(prompt, max_tokens=max_tokens, json_mode=True)
+    if not texto:
+        return None
+    try:
+        texto_limpo = texto.replace("```json", "").replace("```", "").strip()
+        return json.loads(texto_limpo, strict=False)
+    except json.JSONDecodeError as erro:
+        ultimo_erro = f"Resposta da IA não é um JSON válido (pode ter sido cortada): {erro}"
+        return None
