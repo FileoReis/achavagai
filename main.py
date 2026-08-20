@@ -25,6 +25,7 @@ Fluxo:
 """
 
 import argparse
+import glob
 import os
 import re
 import sys
@@ -43,7 +44,7 @@ from openpyxl.utils import get_column_letter
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 
 from resume_parser import analisar_curriculo
 from scrapers import (
@@ -71,6 +72,125 @@ def dividir_palavras_chave(texto: str) -> list[str]:
 
 def perguntar(pergunta: str, padrao: str | None) -> str:
     return Prompt.ask(f"[bold cyan]{pergunta}[/bold cyan]", default=padrao or "")
+
+
+def _limpar_caminho(caminho: str) -> str:
+    """Remove aspas que costumam vir junto quando se arrasta um arquivo para o
+    terminal, ou quando se copia um caminho do Explorador de Arquivos do Windows."""
+    return caminho.strip().strip('"').strip("'")
+
+
+def resolver_caminho_pdf(caminho_informado: str | None) -> str:
+    """Garante um caminho válido para o PDF do currículo antes de continuar —
+    nunca deixa o script quebrar com um erro feio de arquivo não encontrado.
+
+    - Se `caminho_informado` já existir, usa ele direto.
+    - Se não existir (ou não tiver sido informado), tenta ajudar:
+      encontra .pdf na pasta atual automaticamente (sugerindo se houver 1, ou
+      listando para escolher se houver vários) e, em último caso, pede o
+      caminho completo digitado."""
+    if caminho_informado:
+        caminho_informado = _limpar_caminho(caminho_informado)
+        if os.path.isfile(caminho_informado):
+            return caminho_informado
+        console.print(f"[yellow]Não encontrei o arquivo \"{caminho_informado}\".[/yellow]")
+
+    while True:
+        pdfs_na_pasta = sorted(glob.glob("*.pdf"))
+
+        if len(pdfs_na_pasta) == 1:
+            if Confirm.ask(f"Encontrei [bold]{pdfs_na_pasta[0]}[/bold] na pasta atual — usar esse arquivo?", default=True):
+                return pdfs_na_pasta[0]
+        elif len(pdfs_na_pasta) > 1:
+            console.print("\n[bold]Encontrei vários PDFs na pasta atual:[/bold]")
+            for i, nome in enumerate(pdfs_na_pasta, start=1):
+                console.print(f"  {i}. {nome}")
+            escolha = _limpar_caminho(
+                perguntar("Digite o número do currículo desejado, ou cole o caminho completo de outro arquivo", "1")
+            )
+            if escolha.isdigit() and 1 <= int(escolha) <= len(pdfs_na_pasta):
+                return pdfs_na_pasta[int(escolha) - 1]
+            if os.path.isfile(escolha):
+                return escolha
+            console.print(f"[yellow]Não encontrei \"{escolha}\".[/yellow]")
+            continue
+
+        caminho_manual = _limpar_caminho(perguntar("Digite o caminho completo do PDF do currículo", ""))
+        if os.path.isfile(caminho_manual):
+            return caminho_manual
+        console.print(f"[red]Não encontrei \"{caminho_manual}\". Tente novamente.[/red]")
+
+
+def _salvar_env(chaves: dict) -> None:
+    """Salva (ou atualiza) o arquivo .env com as chaves informadas, preservando
+    outras variáveis que já estivessem lá."""
+    caminho_env = ".env"
+    linhas_existentes = {}
+    if os.path.isfile(caminho_env):
+        with open(caminho_env, "r", encoding="utf-8") as f:
+            for linha in f:
+                if "=" in linha and not linha.strip().startswith("#"):
+                    chave, _, valor = linha.strip().partition("=")
+                    linhas_existentes[chave] = valor
+
+    linhas_existentes.update(chaves)
+
+    with open(caminho_env, "w", encoding="utf-8") as f:
+        for chave, valor in linhas_existentes.items():
+            f.write(f"{chave}={valor}\n")
+
+    console.print(f"[bold green]✓[/bold green] Chave(s) salva(s) em [bold].env[/bold] — não vai precisar configurar de novo.")
+
+
+def configurar_ia_interativa() -> None:
+    """Se nenhuma chave de IA estiver configurada (nem por .env, nem por
+    variável de ambiente), explica os benefícios e oferece configurar uma
+    agora — sem precisar sair do script para editar arquivo nenhum."""
+    if ia.provedor_disponivel():
+        return
+
+    console.print(Panel(
+        "O AchaVagAI funciona sem IA (usando um ranking local mais simples, por "
+        "similaridade de texto), mas fica bem melhor com uma IA configurada:\n\n"
+        "• Lê o currículo inteiro e entende contexto, não só palavras-chave soltas\n"
+        "• Avalia requisitos reais da vaga (ex.: categoria de CNH, curso técnico, "
+        "vaga exclusiva PCD) em vez de só comparar se o título parece parecido\n"
+        "• Explica o motivo de cada nota\n"
+        "• Pode gerar mensagens de candidatura prontas para copiar e enviar\n\n"
+        "O [bold]Gemini[/bold] (Google) é gratuito e não pede cartão de crédito — "
+        "crie uma chave em [bold]https://aistudio.google.com/apikey[/bold].",
+        title="[bold]Nenhuma IA configurada[/bold]",
+        border_style="yellow",
+    ))
+
+    if not Confirm.ask("Quer configurar uma chave de IA agora?", default=True):
+        console.print("[dim]Ok, seguindo sem IA. Pode configurar depois criando um arquivo .env na pasta do projeto.[/dim]")
+        return
+
+    nomes_provedor = {"gemini": ("GEMINI_API_KEY", "Gemini"), "claude": ("ANTHROPIC_API_KEY", "Claude")}
+    chaves_coletadas = {}
+
+    while True:
+        escolha = Prompt.ask(
+            "Qual provedor você quer configurar",
+            choices=["gemini", "claude"],
+            default="gemini",
+        )
+        nome_var, nome_exibicao = nomes_provedor[escolha]
+        chave_valor = Prompt.ask(f"Cole sua chave do {nome_exibicao}", password=True).strip()
+
+        if chave_valor:
+            chaves_coletadas[nome_var] = chave_valor
+            os.environ[nome_var] = chave_valor
+            console.print(f"[green]✓[/green] {nome_exibicao} configurado para esta execução.")
+        else:
+            console.print("[yellow]Nenhuma chave informada — pulando.[/yellow]")
+
+        if not Confirm.ask("Quer adicionar outra chave também (ex.: como alternativa)?", default=False):
+            break
+
+    if chaves_coletadas:
+        _salvar_env(chaves_coletadas)
 
 
 def montar_filtros(perfil) -> dict:
@@ -290,7 +410,7 @@ def exibir_mensagens(mensagens: list) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="AchaVagAI - encontra vagas combinando com seu currículo")
-    parser.add_argument("curriculo_pdf", help="Caminho para o arquivo PDF do currículo")
+    parser.add_argument("curriculo_pdf", nargs="?", default=None, help="Caminho para o arquivo PDF do currículo (se não informado, o script ajuda a encontrar)")
     parser.add_argument("--sem-ia", action="store_true", help="Desativa toda a análise de IA (ranking, extração de perfil e mensagens), mesmo com chave configurada.")
     parser.add_argument("--com-mensagens", action="store_true", help="Gera mensagens de candidatura personalizadas para as melhores vagas (desativado por padrão — usa chamadas extras de IA).")
     parser.add_argument("--top", type=int, default=15, help="Quantas vagas mostrar no resumo final (padrão: 15)")
@@ -304,8 +424,13 @@ def main():
 
     console.rule("[bold cyan]ACHAVAGAI[/bold cyan]")
 
-    console.print(f"[dim]Lendo currículo:[/dim] {args.curriculo_pdf}")
-    perfil = analisar_curriculo(args.curriculo_pdf)
+    if not args.sem_ia:
+        configurar_ia_interativa()
+
+    caminho_pdf = resolver_caminho_pdf(args.curriculo_pdf)
+
+    console.print(f"[dim]Lendo currículo:[/dim] {caminho_pdf}")
+    perfil = analisar_curriculo(caminho_pdf)
     exibir_perfil(perfil)
 
     filtros = montar_filtros(perfil)

@@ -2,7 +2,7 @@
 
 Script em Python que lê seu currículo em PDF, sugere filtros de busca (cidade,
 bairro, cargo desejado — com IA quando disponível), procura vagas no LinkedIn,
-Indeed, Vagas, InfoJobs e em portais regionais do Rio de Janeiro (RioVagas,
+Indeed, Vagas.com, InfoJobs e em portais regionais do Rio de Janeiro (RioVagas,
 Rio Emprega, Rio Empregos, VagasRio), ranqueia os resultados por compatibilidade
 com seu currículo (com justificativa da IA), gera mensagens de candidatura
 personalizadas para as melhores vagas, e salva tudo em uma planilha Excel pronta
@@ -11,7 +11,7 @@ para uso.
 ## 1. Instalação
 
 ```bash
-cd achavagai
+cd job_matcher
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -40,8 +40,25 @@ repositórios de código) — trate a chave como uma senha.
 ## 3. Uso básico
 
 ```bash
+python main.py
+```
+
+Você **não precisa mais informar o caminho do PDF na linha de comando** — se
+não informar, o script procura arquivos `.pdf` na pasta atual automaticamente:
+sugere direto se houver só um, lista para você escolher se houver vários, ou
+pede o caminho digitado se não achar nenhum. Também pode passar o caminho
+como antes, se preferir:
+
+```bash
 python main.py caminho/para/seu_curriculo.pdf
 ```
+
+Se nenhuma chave de IA estiver configurada (nem por `.env`, nem por variável de
+ambiente), o script explica os benefícios e **oferece configurar uma na hora**
+— sem precisar editar nenhum arquivo manualmente. Você escolhe o provedor
+(Gemini ou Claude), cola a chave, e pode adicionar quantas quiser; ao final, um
+arquivo `.env` é criado/atualizado automaticamente, então da próxima vez o
+script já usa a IA direto, sem perguntar de novo.
 
 O script vai:
 1. Ler o PDF. Se houver IA configurada, ela lê o currículo inteiro e extrai um
@@ -89,7 +106,7 @@ Quando há IA disponível, ela é usada em três pontos:
 ## 5. Estrutura do projeto
 
 ```
-achavagai/
+job_matcher/
 ├── main.py                     # orquestra todo o fluxo
 ├── resume_parser.py            # lê o PDF e extrai o perfil do candidato (IA + local)
 ├── matcher.py                  # ranqueia vagas (IA + TF-IDF local)
