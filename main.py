@@ -1,6 +1,6 @@
 """
 main.py
-Job Matcher — encontra vagas de emprego combinando com o seu currículo.
+AchaVagAI — encontra vagas de emprego combinando com o seu currículo.
 
 Uso:
     python main.py caminho/para/curriculo.pdf
@@ -289,10 +289,10 @@ def exibir_mensagens(mensagens: list) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Job Matcher - encontra vagas combinando com seu currículo")
+    parser = argparse.ArgumentParser(description="AchaVagAI - encontra vagas combinando com seu currículo")
     parser.add_argument("curriculo_pdf", help="Caminho para o arquivo PDF do currículo")
     parser.add_argument("--sem-ia", action="store_true", help="Desativa toda a análise de IA (ranking, extração de perfil e mensagens), mesmo com chave configurada.")
-    parser.add_argument("--sem-mensagens", action="store_true", help="Não gera mensagens de candidatura personalizadas (mais rápido / menos chamadas de IA).")
+    parser.add_argument("--com-mensagens", action="store_true", help="Gera mensagens de candidatura personalizadas para as melhores vagas (desativado por padrão — usa chamadas extras de IA).")
     parser.add_argument("--top", type=int, default=15, help="Quantas vagas mostrar no resumo final (padrão: 15)")
     parser.add_argument("--top-mensagens", type=int, default=5, help="Para quantas vagas do topo gerar mensagem de candidatura (padrão: 5)")
     parser.add_argument("--nota-minima", type=float, default=NOTA_MINIMA_PADRAO, help=f"Nota mínima (0-100) para uma vaga aparecer nos resultados (padrão: {NOTA_MINIMA_PADRAO})")
@@ -302,7 +302,7 @@ def main():
         os.environ.pop("GEMINI_API_KEY", None)
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
-    console.rule("[bold cyan]JOB MATCHER[/bold cyan]")
+    console.rule("[bold cyan]ACHAVAGAI[/bold cyan]")
 
     console.print(f"[dim]Lendo currículo:[/dim] {args.curriculo_pdf}")
     perfil = analisar_curriculo(args.curriculo_pdf)
@@ -388,7 +388,7 @@ def main():
     exibir_resultados(ranking, args.top)
 
     mensagens = []
-    if provedor and not args.sem_mensagens:
+    if provedor and args.com_mensagens:
         console.print(f"\n[bold magenta]Gerando mensagens de candidatura para as top {args.top_mensagens} vagas...[/bold magenta]")
         with console.status("[magenta]Escrevendo mensagens personalizadas...[/magenta]"):
             mensagens = gerar_mensagens_top(perfil.texto_completo, ranking, quantidade=args.top_mensagens)

@@ -1,5 +1,5 @@
 """
-Configurações gerais do Job Matcher.
+Configurações gerais do AchaVagAI.
 Ajuste as listas abaixo conforme sua região / área de atuação.
 """
 

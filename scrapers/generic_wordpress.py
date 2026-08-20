@@ -51,21 +51,40 @@ MESES = {
 }
 DATA_EXTENSO_RE = re.compile(r"(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})", re.IGNORECASE)
 
+# Nas páginas de LISTAGEM/busca (diferente da página de detalhe de cada vaga), esses
+# portais costumam mostrar a data em formato numérico brasileiro, ex.: "16/08/2026 –
+# 08:27". Como é a página de listagem que o scraper realmente lê, esse é o formato
+# que mais aparece na prática — o padrão por extenso acima cobre principalmente as
+# páginas de detalhe (quando o texto completo do post inclui essa informação).
+DATA_NUMERICA_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+
 
 def _extrair_data_do_texto(texto: str) -> str:
-    """Tenta achar uma data por extenso no texto (ex.: "7 de February de 2025")
-    e converte para ISO (AAAA-MM-DD). Retorna "" se não encontrar nada reconhecível."""
-    match = DATA_EXTENSO_RE.search(texto)
-    if not match:
-        return ""
-    dia, mes_nome, ano = match.groups()
-    mes = MESES.get(mes_nome.lower())
-    if not mes:
-        return ""
-    try:
-        return f"{int(ano):04d}-{mes:02d}-{int(dia):02d}"
-    except ValueError:
-        return ""
+    """Tenta achar uma data no texto, em qualquer um dos formatos usados por esses
+    portais — por extenso (ex.: "7 de February de 2025") ou numérico brasileiro
+    (ex.: "16/08/2026 – 08:27") — e converte para ISO (AAAA-MM-DD). Retorna "" se
+    não encontrar nada reconhecível."""
+    match_extenso = DATA_EXTENSO_RE.search(texto)
+    if match_extenso:
+        dia, mes_nome, ano = match_extenso.groups()
+        mes = MESES.get(mes_nome.lower())
+        if mes:
+            try:
+                return f"{int(ano):04d}-{mes:02d}-{int(dia):02d}"
+            except ValueError:
+                pass
+
+    match_numerico = DATA_NUMERICA_RE.search(texto)
+    if match_numerico:
+        dia, mes, ano = match_numerico.groups()
+        try:
+            dia, mes, ano = int(dia), int(mes), int(ano)
+            if 1 <= dia <= 31 and 1 <= mes <= 12:
+                return f"{ano:04d}-{mes:02d}-{dia:02d}"
+        except ValueError:
+            pass
+
+    return ""
 
 
 def _extrair_posts(soup: BeautifulSoup) -> list:
@@ -89,6 +108,24 @@ def _extrair_data(post, data_tag) -> str:
         if encontrada:
             return encontrada
     return _extrair_data_do_texto(post.get_text(" ", strip=True))
+
+
+def _relevante(vaga: Vaga, palavra_chave: str) -> bool:
+    """Filtro de segurança local: confirma que o termo buscado realmente aparece
+    no título ou na descrição da vaga. Necessário porque a busca nativa ("?s=")
+    de alguns desses portais não é confiável — em teste, o VagasRio chegou a
+    ignorar completamente o termo pesquisado e devolver sempre os posts mais
+    recentes do site inteiro, independente da palavra buscada (confirmado
+    comparando os resultados de uma busca real com uma busca por um termo
+    inexistente — ambos retornaram o mesmo conteúdo). Sem esse filtro, o
+    ranking final acaba avaliando vagas de áreas completamente diferentes."""
+    if not palavra_chave:
+        return True
+    termos = [t for t in palavra_chave.lower().split() if len(t) > 2]
+    if not termos:
+        return True
+    texto = f"{vaga.titulo} {vaga.descricao}".lower()
+    return any(termo in texto for termo in termos)
 
 
 def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) -> list[Vaga]:
@@ -124,7 +161,7 @@ def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) ->
             )
         )
 
-    return vagas
+    return [v for v in vagas if _relevante(v, palavra_chave)]
 
 
 def buscar_vagas_todos_wordpress(palavra_chave: str, sites_ativos: dict[str, bool]) -> list[Vaga]:

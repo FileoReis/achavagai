@@ -1,4 +1,4 @@
-# Job Matcher — Busca automática de vagas a partir do currículo
+# AchaVagAI — Busca automática de vagas a partir do currículo
 
 Script em Python que lê seu currículo em PDF, sugere filtros de busca (cidade,
 bairro, cargo desejado — com IA quando disponível), procura vagas no LinkedIn,
@@ -64,7 +64,7 @@ O script vai:
 
 ```
 --sem-ia                    Desativa toda a análise de IA (mesmo com chave configurada)
---sem-mensagens             Não gera mensagens de candidatura (mais rápido)
+--com-mensagens              Gera mensagens de candidatura personalizadas (desativado por padrão)
 --top N                     Quantas vagas mostrar no resumo (padrão: 15)
 --top-mensagens N           Para quantas vagas gerar mensagem de candidatura (padrão: 5)
 --nota-minima N             Nota mínima 0-100 para uma vaga aparecer nos resultados (padrão: 30)
@@ -161,19 +161,23 @@ essas costumam ser mais simples de ler.
 ## 9. Limitações conhecidas
 
 - Os portais regionais (RioVagas, Rio Emprega etc.) funcionam como blogs e não
-  têm filtro estruturado de cidade — a "vaga" é o post do blog, e a busca por
-  palavra-chave neles é um "contém no texto" simples (busca nativa do WordPress),
-  não uma busca semântica. Isso significa que ela pode ocasionalmente trazer
-  vagas de área bem diferente da que você buscou, se a palavra aparecer em
-  qualquer lugar do post (título, categoria, texto). A IA ajuda a filtrar isso
-  (dando nota baixa a vagas de área diferente), mas não é perfeito — sempre
-  revise a lista antes de se candidatar.
+  têm filtro estruturado de cidade — a "vaga" é o post do blog. A busca nativa
+  desses sites (parâmetro "?s=" do WordPress) nem sempre filtra de verdade —
+  confirmamos que o **VagasRio especificamente ignora o termo pesquisado** e
+  sempre devolve os posts mais recentes do site inteiro (testamos comparando
+  uma busca real com uma busca por um termo que não existe — os dois
+  retornaram o mesmo conteúdo). Por isso o script aplica um **filtro local de
+  segurança**: só mantém vagas cujo título/descrição realmente contenham a
+  palavra buscada, descartando o resto — mas isso significa que, se o site não
+  tiver nenhuma vaga relevante entre os posts mais recentes, você vai ver
+  poucos ou nenhum resultado desse portal para termos de nicho.
 - O Indeed pode exigir captcha em navegação intensa; quando isso acontece, o
   script simplesmente não retorna resultados desse site naquela execução.
 - Sem IA configurada, a extração de perfil e o ranking de vagas usam regras
   simples (palavras-chave/TF-IDF) — bem mais rápido, porém menos preciso que a
   análise com IA, e sem verificação de requisitos concretos (habilitação, curso
-  técnico específico etc.) — que só a IA consegue avaliar lendo o currículo.
+  técnico específico, elegibilidade PCD etc.) — que só a IA consegue avaliar
+  lendo o currículo.
 - O filtro de dias descarta vagas cuja data de publicação seja identificável e
   esteja fora do prazo; vagas sem data reconhecível (comum no Indeed, InfoJobs e
   Vagas.com) são mantidas, já que não é possível confirmar a idade delas.

@@ -62,6 +62,12 @@ que o título da vaga pareça relacionado — por exemplo:
   se o currículo não menciona formação ou experiência nessa área específica,
   a nota deve ser BAIXA, mesmo que a palavra "técnico" apareça no currículo
   para uma área totalmente diferente.
+- Vaga EXCLUSIVA para PCD (Pessoa com Deficiência): isso é um critério de
+  elegibilidade legal, não uma preferência — se o currículo não menciona
+  nenhuma deficiência, a nota deve ser MUITO BAIXA (próxima de 0), mesmo que
+  o cargo em si combine perfeitamente com o perfil do candidato. NÃO dê nota
+  intermediária "porque o resto combina" — a vaga exclusiva para PCD elimina
+  o candidato sem deficiência declarada, ponto final.
 - Não assuma que o candidato tem uma qualificação só porque não foi
   mencionada — ausência de menção = não presuma que ele tem.
 
