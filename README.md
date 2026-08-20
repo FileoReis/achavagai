@@ -11,7 +11,7 @@ para uso.
 ## 1. Instalação
 
 ```bash
-cd job_matcher
+cd achavagai
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -89,7 +89,7 @@ Quando há IA disponível, ela é usada em três pontos:
 ## 5. Estrutura do projeto
 
 ```
-job_matcher/
+achavagai/
 ├── main.py                     # orquestra todo o fluxo
 ├── resume_parser.py            # lê o PDF e extrai o perfil do candidato (IA + local)
 ├── matcher.py                  # ranqueia vagas (IA + TF-IDF local)
