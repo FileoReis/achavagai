@@ -1,0 +1,10 @@
+# Renomeie este arquivo para ".env" (sem as aspas) e preencha com sua chave.
+# O arquivo .env fica na mesma pasta do main.py e é lido automaticamente —
+# não precisa mais rodar $env:GEMINI_API_KEY="..." toda vez que abrir o PowerShell.
+#
+# Você só precisa de UMA das duas chaves abaixo (Gemini é gratuito e recomendado
+# para começar). Se preencher as duas, o script usa o Gemini por padrão.
+
+GEMINI_API_KEY=
+GEMINI_API_KEY_2=
+GEMINI_API_KEY_3=
