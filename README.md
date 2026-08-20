@@ -2,7 +2,7 @@
 
 Script em Python que lê seu currículo em PDF, sugere filtros de busca (cidade,
 bairro, cargo desejado — com IA quando disponível), procura vagas no LinkedIn,
-Indeed, Vagas.com, InfoJobs e em portais regionais do Rio de Janeiro (RioVagas,
+Indeed, Vagas, InfoJobs e em portais regionais do Rio de Janeiro (RioVagas,
 Rio Emprega, Rio Empregos, VagasRio), ranqueia os resultados por compatibilidade
 com seu currículo (com justificativa da IA), gera mensagens de candidatura
 personalizadas para as melhores vagas, e salva tudo em uma planilha Excel pronta
