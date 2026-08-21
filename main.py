@@ -177,7 +177,7 @@ def configurar_ia_interativa() -> None:
             default="gemini",
         )
         nome_var, nome_exibicao = nomes_provedor[escolha]
-        chave_valor = Prompt.ask(f"Cole sua chave do {nome_exibicao}", password=True).strip()
+        chave_valor = Prompt.ask(f"Cole sua chave do {nome_exibicao}").strip()
 
         if chave_valor:
             chaves_coletadas[nome_var] = chave_valor
