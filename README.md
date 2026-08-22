@@ -11,7 +11,7 @@ para uso.
 ## 1. Instalação
 
 ```bash
-cd achavagai-main
+cd job_matcher
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt

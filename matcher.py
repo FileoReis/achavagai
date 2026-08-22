@@ -68,6 +68,20 @@ que o título da vaga pareça relacionado — por exemplo:
   o cargo em si combine perfeitamente com o perfil do candidato. NÃO dê nota
   intermediária "porque o resto combina" — a vaga exclusiva para PCD elimina
   o candidato sem deficiência declarada, ponto final.
+- Vaga com restrição EXPLÍCITA de gênero no texto da descrição (ex.: "vaga
+  exclusiva para mulheres", "buscamos profissional do sexo feminino"): se o
+  gênero do candidato (pelo nome ou currículo) não bate com o exigido, a nota
+  deve ser MUITO BAIXA. IMPORTANTE: isso vale só quando há uma exigência
+  EXPLÍCITA no texto — um título de cargo em forma feminina (ex.: "Vendedora")
+  ou a vaga ser de um departamento associado a um gênero (ex.: "loja de moda
+  feminina") NÃO são, por si só, restrição de gênero — é prática comum no
+  Brasil esses títulos/departamentos aceitarem candidatos de qualquer gênero.
+  Só penalize se o texto pedir EXPLICITAMENTE um gênero específico do candidato.
+- Localização: quando a vaga estiver claramente em outra cidade/região distante
+  da região de busca do candidato (não apenas outro bairro da mesma cidade), e
+  não houver menção de trabalho remoto/home office, trate como um fator que
+  reduz bastante a nota (não apenas uma leve preferência) — candidatos
+  geralmente não podem se candidatar a vagas presenciais fora de sua região.
 - Não assuma que o candidato tem uma qualificação só porque não foi
   mencionada — ausência de menção = não presuma que ele tem.
 

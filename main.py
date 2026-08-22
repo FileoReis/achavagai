@@ -56,7 +56,7 @@ from scrapers import (
 )
 from matcher import ranquear_por_similaridade, ranquear
 from mensagem import gerar_mensagens_top
-from config import SITES_ATIVOS, CIDADES_RJ, NOTA_MINIMA_PADRAO
+from config import SITES_ATIVOS, CIDADES_RJ, NOTA_MINIMA_PADRAO, UF_ALVO
 import ia
 
 console = Console()
@@ -248,6 +248,30 @@ def remover_duplicadas(vagas: list) -> list:
             vistos.add(vaga.link)
             unicas.append(vaga)
     return unicas
+
+
+UF_NA_CIDADE_RE = re.compile(r"/\s*([A-Z]{2})\b")
+
+
+def filtrar_por_regiao(vagas: list, uf_alvo: str = UF_ALVO) -> tuple[list, int]:
+    """Descarta vagas cujo campo `cidade` traga explicitamente um estado (UF)
+    diferente do configurado — ex.: "São Paulo / SP" é descartado se `uf_alvo` for
+    "RJ". Isso é feito no código (não só confiando na IA) porque a análise de IA
+    tratava localização apenas como uma preferência, não uma exclusão — e vagas de
+    outros estados chegavam a passar com nota razoável mesmo assim.
+
+    Vagas sem UF identificável no campo cidade (a maioria, já que muitos sites não
+    estruturam isso) NÃO são descartadas por este filtro — segue tudo para a IA/
+    TF-IDF avaliar normalmente. Retorna (vagas_filtradas, quantidade_removida)."""
+    filtradas = []
+    removidas = 0
+    for vaga in vagas:
+        match = UF_NA_CIDADE_RE.search(vaga.cidade or "")
+        if match and match.group(1).upper() != uf_alvo.upper():
+            removidas += 1
+            continue
+        filtradas.append(vaga)
+    return filtradas, removidas
 
 
 def _idade_em_dias(data_publicacao: str) -> int | None:
@@ -461,6 +485,17 @@ def main():
 
     if not vagas:
         console.print("[red]Nenhuma vaga passou do filtro de data. Tente aumentar o número de dias.[/red]")
+        sys.exit(0)
+
+    vagas, removidas_por_regiao = filtrar_por_regiao(vagas)
+    if removidas_por_regiao:
+        console.print(
+            f"[dim]{removidas_por_regiao} vaga(s) de fora do estado {UF_ALVO} foram descartadas "
+            f"(ajustável em UF_ALVO no config.py).[/dim]"
+        )
+
+    if not vagas:
+        console.print("[red]Nenhuma vaga passou do filtro de região. Tente ajustar UF_ALVO no config.py.[/red]")
         sys.exit(0)
 
     provedor = ia.provedor_disponivel()

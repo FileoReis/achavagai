@@ -98,3 +98,9 @@ SITES_ATIVOS = {
 # Excel). Vagas abaixo desse valor são descartadas para reduzir ruído. Pode ser
 # sobrescrito na linha de comando com --nota-minima.
 NOTA_MINIMA_PADRAO = 25
+
+# UF (estado) alvo deste script — usado para descartar automaticamente vagas de
+# outros estados quando o site/scraper informa a cidade com UF (ex.: "São Paulo
+# / SP" é descartado se UF_ALVO = "RJ"). Vagas sem UF identificável não são
+# descartadas por esse filtro (não dá pra confirmar que são de outro estado).
+UF_ALVO = "RJ"
