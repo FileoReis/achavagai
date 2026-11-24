@@ -18,6 +18,8 @@ ou, se disponível para você, a API oficial de parceiros do LinkedIn.
 from bs4 import BeautifulSoup
 
 from .base import Vaga, nova_sessao, buscar_url
+from .adaptive import extrair_vagas_adaptativo, mesclar_vagas
+from .diagnostico import registrar_parser
 
 BASE_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
@@ -37,15 +39,19 @@ def buscar_vagas_linkedin(palavra_chave: str, cidade: str, max_paginas: int = 2)
             "location": cidade,
             "start": pagina * 25,
         }
-        resposta = buscar_url(sessao, BASE_URL, params=params)
+        resposta = buscar_url(sessao, BASE_URL, diagnostico_nome="LinkedIn", params=params)
         if resposta is None:
             break
 
         soup = BeautifulSoup(resposta.text, "html.parser")
         cards = soup.find_all("li")
         if not cards:
+            alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, "LinkedIn", BASE_URL, 60)
+            vagas = mesclar_vagas(vagas, alternativas, 60)
+            registrar_parser(BASE_URL, len(alternativas), estrategia, resposta.text, "LinkedIn")
             break
 
+        extraidas_antes = len(vagas)
         for card in cards:
             titulo_tag = card.find("h3", class_="base-search-card__title")
             empresa_tag = card.find("h4", class_="base-search-card__subtitle")
@@ -67,5 +73,8 @@ def buscar_vagas_linkedin(palavra_chave: str, cidade: str, max_paginas: int = 2)
                     fonte="LinkedIn",
                 )
             )
+        alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, "LinkedIn", BASE_URL, 60)
+        vagas = mesclar_vagas(vagas, alternativas, 60)
+        registrar_parser(BASE_URL, len(alternativas), estrategia, resposta.text, "LinkedIn")
 
     return vagas

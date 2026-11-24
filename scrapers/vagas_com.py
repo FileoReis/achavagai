@@ -14,6 +14,8 @@ import re
 from bs4 import BeautifulSoup
 
 from .base import Vaga, nova_sessao, buscar_url
+from .adaptive import extrair_vagas_adaptativo, mesclar_vagas
+from .diagnostico import registrar_parser
 from .utils import slugify
 
 BASE_URL = "https://www.vagas.com.br"
@@ -29,7 +31,7 @@ def buscar_vagas_vagas_com(palavra_chave: str, cidade: str = "", max_resultados:
     sessao = nova_sessao()
     url = f"{BASE_URL}/vagas-de-{slugify(palavra_chave)}"
 
-    resposta = buscar_url(sessao, url)
+    resposta = buscar_url(sessao, url, diagnostico_nome="Vagas.com")
     if resposta is None:
         return []
 
@@ -88,4 +90,10 @@ def buscar_vagas_vagas_com(palavra_chave: str, cidade: str = "", max_resultados:
         if len(vagas) >= max_resultados:
             break
 
+    alternativas, estrategia_adaptativa = extrair_vagas_adaptativo(resposta.text, "Vagas.com", BASE_URL, max_resultados)
+    vagas = mesclar_vagas(vagas, alternativas, max_resultados)
+    estrategia = "seletores conhecidos Vagas.com" if not estrategia_adaptativa.startswith("nenhuma") else estrategia_adaptativa
+    if alternativas:
+        estrategia += " + " + estrategia_adaptativa
+    registrar_parser(url, len(vagas), estrategia, resposta.text, "Vagas.com")
     return vagas

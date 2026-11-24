@@ -22,6 +22,9 @@ import re
 from bs4 import BeautifulSoup
 
 from .base import Vaga, nova_sessao, buscar_url
+from .adaptive import extrair_vagas_adaptativo
+from .diagnostico import registrar_parser
+from intencao_busca import compilar_intencoes, vaga_corresponde
 
 # nome de exibição -> URL base do site
 SITES_WORDPRESS = {
@@ -119,13 +122,7 @@ def _relevante(vaga: Vaga, palavra_chave: str) -> bool:
     comparando os resultados de uma busca real com uma busca por um termo
     inexistente — ambos retornaram o mesmo conteúdo). Sem esse filtro, o
     ranking final acaba avaliando vagas de áreas completamente diferentes."""
-    if not palavra_chave:
-        return True
-    termos = [t for t in palavra_chave.lower().split() if len(t) > 2]
-    if not termos:
-        return True
-    texto = f"{vaga.titulo} {vaga.descricao}".lower()
-    return any(termo in texto for termo in termos)
+    return vaga_corresponde(vaga, compilar_intencoes([palavra_chave]))
 
 
 def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) -> list[Vaga]:
@@ -133,7 +130,7 @@ def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) ->
     vagas: list[Vaga] = []
 
     url_busca = f"{url_base}/?s={palavra_chave.replace(' ', '+')}"
-    resposta = buscar_url(sessao, url_busca)
+    resposta = buscar_url(sessao, url_busca, diagnostico_nome=nome_site)
     if resposta is None:
         return vagas
 
@@ -161,7 +158,13 @@ def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) ->
             )
         )
 
-    return [v for v in vagas if _relevante(v, palavra_chave)]
+    vagas = [v for v in vagas if _relevante(v, palavra_chave)]
+    estrategia = "cartões WordPress (article/post/entry)" if vagas else "nenhum post WordPress reconhecido"
+    if not vagas:
+        alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, nome_site, url_base, 60)
+        vagas.extend(v for v in alternativas if _relevante(v, palavra_chave))
+    registrar_parser(url_busca, len(vagas), estrategia, resposta.text, nome_site)
+    return vagas
 
 
 def buscar_vagas_todos_wordpress(palavra_chave: str, sites_ativos: dict[str, bool]) -> list[Vaga]:

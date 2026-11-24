@@ -1,9 +1,16 @@
-pdfplumber>=0.11.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-scikit-learn>=1.4.0
-anthropic>=0.30.0
-openpyxl>=3.1.0
-rich>=13.7.0
-python-dotenv>=1.0.0
+# Dependências do AchaVagAI. Instale com:  pip install -r requirements.txt
+# Testado no Python 3.12 e no 3.14 (com as versões mais novas de todos os pacotes abaixo).
+# O mínimo é o Python 3.11 (scikit-learn e python-dateutil recentes exigem isso).
+# O Python 3.15 não foi validado: antes de trocar o seu .venv para ele, rode os testes.
+pdfplumber>=0.11.4
+requests>=2.32.0
+beautifulsoup4>=4.12.3
+scikit-learn>=1.5.0
+openpyxl>=3.1.5
+rich>=13.9.0
+python-dotenv>=1.0.1
 python-dateutil>=2.9.0
+
+# Só é usado se você configurar ANTHROPIC_API_KEY (Claude). Com o Gemini não faz falta,
+# mas deixei instalado como antes para a opção "claude" do assistente de configuração funcionar.
+anthropic>=0.40.0

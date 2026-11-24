@@ -1,200 +1,150 @@
-# AchaVagAI — Busca automática de vagas a partir do currículo
+# AchaVagAI
 
-Script em Python que lê seu currículo em PDF, sugere filtros de busca (cidade,
-bairro, cargo desejado — com IA quando disponível), procura vagas no LinkedIn,
-Indeed, Vagas.com, InfoJobs e em portais regionais do Rio de Janeiro (RioVagas,
-Rio Emprega, Rio Empregos, VagasRio), ranqueia os resultados por compatibilidade
-com seu currículo (com justificativa da IA), gera mensagens de candidatura
-personalizadas para as melhores vagas, e salva tudo em uma planilha Excel pronta
-para uso.
+Aplicativo local para ler um currículo em PDF, pesquisar oportunidades em vários portais, verificar requisitos eliminatórios, comparar as vagas com a experiência profissional e exportar os resultados para Excel.
 
-## 1. Instalação
+## 1. Instalação no Windows
 
-```bash
-cd achavagai-main
+Abra o PowerShell na pasta do projeto:
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+copy .env.example .env
 ```
 
-## 2. Configurar sua chave de IA (uma vez só)
+Edite o `.env` e preencha ao menos `GEMINI_API_KEY`. Crie chaves no Google AI Studio: <https://aistudio.google.com/apikey>.
 
-1. Copie o arquivo `.env.example` para `.env` (mesma pasta do `main.py`).
-2. Preencha com sua chave — recomendo o **Gemini**, que é gratuito:
-   - Acesse **https://aistudio.google.com/apikey**, faça login com sua conta
-     Google e clique em "Create API key" (não pede cartão de crédito).
-   - Cole a chave no `.env`:
-     ```
-     GEMINI_API_KEY=cole-sua-chave-aqui
-     ```
-3. Pronto — o script lê o `.env` sozinho a partir de agora. Não precisa mais
-   digitar `$env:GEMINI_API_KEY=...` toda vez que abrir o terminal.
+Execute:
 
-Se preferir usar o Claude (Anthropic) em vez do Gemini, preencha
-`ANTHROPIC_API_KEY` no lugar (uso pago). Sem nenhuma das duas chaves, o script
-funciona normalmente, só que com uma análise mais simples (veja a seção 4).
-
-**Nunca compartilhe o conteúdo do seu `.env`** (nem aqui, nem em print, nem em
-repositórios de código) — trate a chave como uma senha.
-
-## 3. Uso básico
-
-```bash
+```powershell
 python main.py
 ```
 
-Você **não precisa mais informar o caminho do PDF na linha de comando** — se
-não informar, o script procura arquivos `.pdf` na pasta atual automaticamente:
-sugere direto se houver só um, lista para você escolher se houver vários, ou
-pede o caminho digitado se não achar nenhum. Também pode passar o caminho
-como antes, se preferir:
+Exemplo sem perguntas:
 
-```bash
-python main.py caminho/para/seu_curriculo.pdf
+```powershell
+python main.py curriculo.pdf --sim --cidade "Rio de Janeiro" --cargo "Auxiliar de CPD, Motorista B" --dias 7
 ```
 
-Se nenhuma chave de IA estiver configurada (nem por `.env`, nem por variável de
-ambiente), o script explica os benefícios e **oferece configurar uma na hora**
-— sem precisar editar nenhum arquivo manualmente. Você escolhe o provedor
-(Gemini ou Claude), cola a chave, e pode adicionar quantas quiser; ao final, um
-arquivo `.env` é criado/atualizado automaticamente, então da próxima vez o
-script já usa a IA direto, sem perguntar de novo.
+Python 3.11 ou superior.
 
-O script vai:
-1. Ler o PDF. Se houver IA configurada, ela lê o currículo inteiro e extrai um
-   perfil estruturado (cidade, bairro, cargo sugerido, senioridade, principais
-   habilidades e um resumo do perfil) — mais preciso do que buscar palavras-chave
-   soltas. Sem IA, usa a extração local por palavras-chave como alternativa.
-2. Perguntar se você quer confirmar ou ajustar os filtros (Enter aceita o valor
-   sugerido). Você pode informar **vários cargos separados por vírgula** (ex.:
-   `Técnico em Informática, Vendedor`) — o script busca cada um separadamente e
-   combina os resultados.
-3. Buscar vagas em todos os sites configurados.
-4. Ranquear as vagas por aderência ao currículo, e **descartar automaticamente**
-   as vagas com nota muito baixa (veja `--nota-minima` abaixo).
-5. Gerar uma mensagem de candidatura pronta para as melhores vagas (se houver IA).
-6. Mostrar tudo em tabelas coloridas no terminal e salvar em uma planilha Excel
-   (`vagas_encontradas_AAAAMMDD_HHMM.xlsx`) com duas abas: **Vagas** (com nota,
-   motivo da IA e link clicável) e **Mensagens de Candidatura**.
+## 2. Modelos Gemini e três chaves
 
-### Opções de linha de comando
+O padrão é **Gemini 3.8 Flash**, com nível de raciocínio `high`. É a opção Flash de maior capacidade disponível na configuração padrão. Se falhar repetidamente por instabilidade/indisponibilidade ou falta de acesso, o sistema tenta `gemini-3.5-flash-lite`. O modelo 3.6 Flash não faz mais parte da lista padrão.
 
-```
---sem-ia                    Desativa toda a análise de IA (mesmo com chave configurada)
---com-mensagens              Gera mensagens de candidatura personalizadas (desativado por padrão)
---top N                     Quantas vagas mostrar no resumo (padrão: 15)
---top-mensagens N           Para quantas vagas gerar mensagem de candidatura (padrão: 5)
---nota-minima N             Nota mínima 0-100 para uma vaga aparecer nos resultados (padrão: 30)
+As três variáveis são reconhecidas:
+
+```dotenv
+GEMINI_API_KEY=...
+GEMINI_API_KEY_2=...
+GEMINI_API_KEY_3=...
 ```
 
-Exemplo: `python main.py curriculo.pdf --nota-minima 50 --top 10`
+As chaves adicionais servem como redundância quando o Google rejeita uma credencial inválida. O programa **não alterna chaves para contornar HTTP 429**: limites de uso são associados ao projeto Google Cloud, e chaves do mesmo projeto compartilham a cota. Ter três chaves no mesmo projeto não triplica a capacidade.
 
-## 4. Como funciona a análise com IA
+Para tentar o modelo de raciocínio de ponta, que pode gerar cobrança, habilite faturamento e defina conscientemente no `.env`:
 
-O script detecta automaticamente qual IA usar, nesta ordem: **Gemini** (se
-`GEMINI_API_KEY` estiver definida) → **Claude** (se `ANTHROPIC_API_KEY` estiver
-definida) → **TF-IDF local** (sem IA nenhuma, sempre funciona, mas sem
-justificativa e menos preciso quanto a sinônimos/contexto).
-
-Quando há IA disponível, ela é usada em três pontos:
-- **Extração do currículo**: perfil estruturado (cidade, cargo, senioridade etc.)
-- **Ranking das vagas**: nota 0–100 + justificativa curta por vaga, considerando
-  área, senioridade e localização — não só palavras em comum.
-- **Mensagens de candidatura**: um texto curto e pronto para copiar e enviar,
-  personalizado para cada uma das melhores vagas.
-
-## 5. Estrutura do projeto
-
-```
-job_matcher/
-├── main.py                     # orquestra todo o fluxo
-├── resume_parser.py            # lê o PDF e extrai o perfil do candidato (IA + local)
-├── matcher.py                  # ranqueia vagas (IA + TF-IDF local)
-├── mensagem.py                 # gera mensagens de candidatura personalizadas
-├── ia.py                       # camada única de acesso a Gemini/Claude
-├── config.py                   # cidades, bairros, palavras-chave, nota mínima etc.
-├── .env.example                # modelo para suas chaves de API
-└── scrapers/
-    ├── base.py                 # classe Vaga + utilidades HTTP
-    ├── utils.py                 # geração de slugs de URL
-    ├── linkedin.py              # busca pública de vagas no LinkedIn
-    ├── indeed.py                 # busca no Indeed Brasil
-    ├── vagas_com.py               # busca no Vagas.com.br
-    ├── infojobs.py                 # busca no InfoJobs Brasil
-    └── generic_wordpress.py        # busca em portais WordPress (RioVagas etc.)
+```dotenv
+GEMINI_MODEL=gemini-4-argon,gemini-3.8-flash,gemini-3.5-flash-lite
 ```
 
-## 6. Sites cobertos, e por que Catho/Gupy não estão na lista
+O projeto não habilita o modelo pago por padrão. Confira os preços e limites atuais antes de ativar: <https://ai.google.dev/gemini-api/docs/pricing>.
 
-Cobertos: **LinkedIn**, **Indeed**, **Vagas.com**, **InfoJobs**, e os portais
-regionais **RioVagas**, **Rio Emprega**, **Rio Empregos**, **VagasRio**.
+O modelo que funcionou pode ser lembrado por até sete dias em `.achavagai_modelo.json`. Para forçar uma lista própria, use `GEMINI_MODEL` com nomes separados por vírgula. Claude também pode ser configurado com `ANTHROPIC_API_KEY` e `CLAUDE_MODEL`; escolha o provedor com `IA_PROVEDOR=gemini` ou `IA_PROVEDOR=claude`.
 
-**Catho** e **Gupy** ficaram de fora por limitações técnicas reais, não por
-falta de tentativa:
-- O **Catho** carrega os resultados de busca via JavaScript (a página inicial
-  vem praticamente vazia, só preenchida depois pelo navegador) — scraping
-  simples com `requests` não consegue ler o conteúdo. Seria necessário um
-  navegador automatizado (Selenium/Playwright), o que traz mais complexidade,
-  lentidão e maior chance de bloqueio.
-- A **Gupy** não tem um portal de busca único — cada empresa tem sua própria
-  página de vagas (`empresa.gupy.io`), e a API pública oficial exige
-  autenticação por empresa. Não há como buscar "todas as vagas da Gupy" de uma
-  vez sem uma lista prévia de quais empresas consultar.
+## 3. Fontes de vagas
 
-Se quiser, posso te ajudar a adicionar manualmente páginas de carreira
-específicas de empresas que usam Gupy (ex.: `empresa.gupy.io/vagas`), já que
-essas costumam ser mais simples de ler.
+Fontes configuradas no projeto:
 
-## 7. Como adicionar novos sites de vagas
+- Vagas.com e InfoJobs.
+- Empregare, por API pública de consulta.
+- Empregando Brasil, por feed XML público.
+- Gupy, por endpoint JSON utilizado pelo portal público de busca. **Integração experimental**: esse endpoint público não é a API corporativa oficialmente documentada e pode mudar sem aviso.
+- Jooble, por API. Precisa de uma chave própria em `JOOBLE_API_KEY` no `.env`.
+- Portais regionais: RioVagas, Rio Emprega, Rio Empregos e VagasRio.
 
-- **Sites baseados em WordPress** (blogs de vagas, comuns em portais regionais):
-  adicione uma entrada no dicionário `SITES_WORDPRESS` em
-  `scrapers/generic_wordpress.py` com o nome e a URL base do site.
-- **Sites com estrutura própria e renderizados no servidor** (não dependem de
-  JavaScript): crie um novo arquivo em `scrapers/`, seguindo o padrão de
-  `vagas_com.py` ou `infojobs.py`.
-- **Sites que dependem de JavaScript** (a maioria dos grandes portais modernos):
-  não são cobertos por este script sem ferramentas adicionais (Selenium/
-  Playwright), que trazem bem mais complexidade e lentidão.
+Indeed e LinkedIn ficam **desativados por padrão**. O terminal mostra links para realizar a busca manualmente. Só habilite coleta automatizada se tiver autorização expressa aplicável; não há tentativa de contornar CAPTCHA, login ou controles anti-bot.
 
-## 8. Avisos importantes (leia antes de usar)
+Ative ou desative cada fonte em `SITES_ATIVOS`, no `config.py`. A busca é feita por cada termo informado e os resultados do mesmo portal são deduplicados antes da contagem.
 
-- **Termos de uso dos sites**: scraping automatizado pode violar os Termos de
-  Uso de alguns sites — especialmente o **LinkedIn**, que proíbe explicitamente
-  coleta automatizada. O scraper aqui usa um endpoint público (sem login), mas
-  isso pode parar de funcionar sem aviso ou levar a bloqueio temporário do seu
-  IP se usado com muita frequência. Use com moderação.
-- **Fragilidade dos scrapers**: sites mudam o HTML com frequência. Se um site
-  parar de retornar resultados, o motivo mais provável é que a estrutura da
-  página mudou — os seletores em `scrapers/*.py` precisam ser atualizados.
-- **Robots.txt e limites de requisição**: o script já inclui uma pequena pausa
-  (`REQUEST_DELAY_SECONDS` em `config.py`) entre requisições. Evite rodar o
-  script em loop contínuo/muito frequente.
-- **Dados pessoais e IA**: nada é enviado a terceiros a menos que você tenha
-  configurado uma chave de IA — nesse caso, o texto do currículo e as vagas
-  pré-selecionadas são enviados ao provedor escolhido (Google ou Anthropic)
-  para gerar as notas, justificativas e mensagens de candidatura.
+## 4. Verificador de fontes e adaptação de estrutura
 
-## 9. Limitações conhecidas
+Cada coletor registra o que aconteceu: resultado vazio, bloqueio/CAPTCHA, erro HTTP, falha de rede, configuração ausente ou possível mudança estrutural.
 
-- Os portais regionais (RioVagas, Rio Emprega etc.) funcionam como blogs e não
-  têm filtro estruturado de cidade — a "vaga" é o post do blog. A busca nativa
-  desses sites (parâmetro "?s=" do WordPress) nem sempre filtra de verdade —
-  confirmamos que o **VagasRio especificamente ignora o termo pesquisado** e
-  sempre devolve os posts mais recentes do site inteiro (testamos comparando
-  uma busca real com uma busca por um termo que não existe — os dois
-  retornaram o mesmo conteúdo). Por isso o script aplica um **filtro local de
-  segurança**: só mantém vagas cujo título/descrição realmente contenham a
-  palavra buscada, descartando o resto — mas isso significa que, se o site não
-  tiver nenhuma vaga relevante entre os posts mais recentes, você vai ver
-  poucos ou nenhum resultado desse portal para termos de nicho.
-- O Indeed pode exigir captcha em navegação intensa; quando isso acontece, o
-  script simplesmente não retorna resultados desse site naquela execução.
-- Sem IA configurada, a extração de perfil e o ranking de vagas usam regras
-  simples (palavras-chave/TF-IDF) — bem mais rápido, porém menos preciso que a
-  análise com IA, e sem verificação de requisitos concretos (habilitação, curso
-  técnico específico, elegibilidade PCD etc.) — que só a IA consegue avaliar
-  lendo o currículo.
-- O filtro de dias descarta vagas cuja data de publicação seja identificável e
-  esteja fora do prazo; vagas sem data reconhecível (comum no Indeed, InfoJobs e
-  Vagas.com) são mantidas, já que não é possível confirmar a idade delas.
+Para páginas HTML, o scraper tenta mais de uma estratégia em vez de depender apenas de um seletor CSS antigo:
+
+1. seletores específicos do portal;
+2. dados estruturados `JobPosting` em JSON-LD;
+3. microdata Schema.org;
+4. extração alternativa por cartões/links semânticos.
+
+Os resultados das estratégias são mesclados e deduplicados. Se os seletores conhecidos falharem, o diagnóstico pode guardar em `diagnosticos/html/` um esqueleto da página contendo tags e atributos estruturais permitidos — sem texto de anúncio, links, cookies ou dados pessoais. Para APIs JSON, o diagnóstico guarda apenas nomes de campos e tipos, nunca valores dos anúncios.
+
+**Limite importante:** o programa consegue se recuperar automaticamente quando a página ainda expõe padrões estruturados reconhecíveis. Quando um portal inventa uma estrutura totalmente nova, o verificador detecta e registra a mudança para correção; ele não reescreve sozinho o código Python nem garante que todo redesign será entendido. CAPTCHA, autenticação e bloqueios não são contornados.
+
+## 5. Leitura do currículo e aderência profissional
+
+A análise do currículo procura separar fatos comprovados de competências transferíveis. O perfil estruturado pode conter:
+
+- famílias profissionais em que há experiência ou formação;
+- cargos sustentados pelo histórico profissional;
+- experiências, atividades, períodos e formação;
+- habilidades e senioridade;
+- habilitações como CNH, sem presumir que possuir CNH significa querer trabalhar como motorista.
+
+O ranking recebe esse contexto e diferencia experiência direta de habilidade transferível. Filtros determinísticos continuam eliminando incompatibilidades objetivas antes da pontuação da IA — por exemplo, CNH exigida, localização confirmada e data/prazo vencido.
+
+A intenção da busca também é conferida no título e na descrição. CPD é tratado como Central de Processamento de Dados; a sigla PCD, de pessoa com deficiência, não é considerada correspondência de CPD. Dados de cidade/empresa não bastam para classificar uma vaga como correspondente ao cargo.
+
+A análise por IA não deve ser tratada como garantia de contratação ou de exatidão absoluta. Confira a descrição original e os requisitos antes de se candidatar.
+
+## 6. Resultados
+
+O programa remove duplicatas, verifica datas e requisitos, classifica as vagas e cria `vagas_encontradas_AAAAMMDD_HHMM.xlsx`. A planilha inclui links de candidatura clicáveis e uma aba com mensagens de candidatura quando `--com-mensagens` é utilizado.
+
+O histórico local permite marcar vagas novas e reaproveitar avaliações anteriores. Apague `.achavagai_historico.json` ou use `--sem-cache` para refazer avaliações.
+
+Opções úteis:
+
+| Opção | Função |
+|---|---|
+| `--sim` | Não pergunta os filtros; aceita sugestões quando não forem informadas. |
+| `--cargo`, `--cidade`, `--bairro`, `--dias` | Define os filtros de busca. |
+| `--nota-minima N` | Define a nota mínima (0 a 100). |
+| `--top N` | Quantidade mostrada no terminal. |
+| `--com-mensagens` | Gera mensagens para candidatura. |
+| `--saida PASTA` | Define a pasta de saída. |
+| `--sem-ia` | Usa o ranking local. |
+| `--sem-cache` | Ignora avaliações anteriores. |
+| `--sem-analise-profunda` | Não abre as páginas das vagas para completar a descrição. |
+
+## 7. Privacidade e credenciais
+
+- Não compartilhe `.env`, PDF do currículo, histórico ou cache.
+- O texto encaminhado à IA passa por anonimização configurável. A limpeza automática reduz exposição, mas não é garantia de remover todos os dados identificáveis; revise o conteúdo antes de usar provedores externos.
+- Os arquivos de diagnóstico são estruturais. Ainda assim, trate a pasta `diagnosticos/` como material técnico do projeto e revise antes de compartilhar.
+- A chave Jooble também é segredo. Não a coloque em código-fonte nem em repositório.
+
+## 8. Testes
+
+Execute localmente:
+
+```powershell
+python -m pytest -q
+```
+
+A suíte atual contém **479 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
+
+## 9. Estrutura
+
+- `main.py`: fluxo da aplicação e fontes.
+- `resume_parser.py`: leitura/estruturação do currículo.
+- `matcher.py`: ranking por IA e alternativa local.
+- `ia.py`: clientes Gemini/Claude, retries e seleção de modelo.
+- `intencao_busca.py`: correspondência entre termos pesquisados e vagas.
+- `habilitacao.py`, `filtros.py`: filtros objetivos.
+- `scrapers/`: coletores, parser adaptativo e diagnósticos.
+- `tests/`: testes automatizados.
+
+Consulte `CHANGELOG.md` para o histórico das alterações.

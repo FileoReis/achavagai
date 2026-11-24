@@ -10,6 +10,8 @@ retornar poucos ou nenhum resultado — nesse caso, use a busca manual no site.
 from bs4 import BeautifulSoup
 
 from .base import Vaga, nova_sessao, buscar_url
+from .adaptive import extrair_vagas_adaptativo, mesclar_vagas
+from .diagnostico import registrar_parser
 
 BASE_URL = "https://br.indeed.com/jobs"
 
@@ -20,15 +22,19 @@ def buscar_vagas_indeed(palavra_chave: str, cidade: str, max_paginas: int = 2) -
 
     for pagina in range(max_paginas):
         params = {"q": palavra_chave, "l": cidade, "start": pagina * 10}
-        resposta = buscar_url(sessao, BASE_URL, params=params)
+        resposta = buscar_url(sessao, BASE_URL, diagnostico_nome="Indeed", params=params)
         if resposta is None:
             break
 
         soup = BeautifulSoup(resposta.text, "html.parser")
         cards = soup.find_all("div", class_="job_seen_beacon") or soup.find_all("td", class_="resultContent")
         if not cards:
+            alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, "Indeed", BASE_URL, 60)
+            vagas = mesclar_vagas(vagas, alternativas, 60)
+            registrar_parser(BASE_URL, len(alternativas), estrategia, resposta.text, "Indeed")
             break
 
+        extraidas_antes = len(vagas)
         for card in cards:
             titulo_tag = card.find("h2") or card.find("a", class_="jcs-JobTitle")
             empresa_tag = card.find("span", {"data-testid": "company-name"})
@@ -53,5 +59,8 @@ def buscar_vagas_indeed(palavra_chave: str, cidade: str, max_paginas: int = 2) -
                     fonte="Indeed",
                 )
             )
+        alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, "Indeed", BASE_URL, 60)
+        vagas = mesclar_vagas(vagas, alternativas, 60)
+        registrar_parser(BASE_URL, len(alternativas), estrategia, resposta.text, "Indeed")
 
     return vagas

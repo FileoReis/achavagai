@@ -1,74 +1,110 @@
 """
 main.py
-AchaVagAI — encontra vagas de emprego combinando com o seu currículo.
+AchaVagAI: encontra vagas de emprego combinando com o seu currículo.
 
 Uso:
     python main.py caminho/para/curriculo.pdf
 
 Fluxo:
   1. Lê o PDF do currículo. Se houver IA configurada (GEMINI_API_KEY ou
-     ANTHROPIC_API_KEY, incluindo via arquivo .env), usa-a para extrair um perfil
+     ANTHROPIC_API_KEY, inclusive via arquivo .env), usa-a para extrair um perfil
      estruturado (cidade, bairro, cargo, senioridade, habilidades); caso contrário,
      usa uma extração local por palavras-chave.
-  2. Pergunta/confirma os filtros de busca (cidade, bairro, palavra-chave — aceita
-     várias separadas por vírgula, nº de dias).
-  3. Busca vagas no LinkedIn, Indeed, Vagas.com, InfoJobs e nos portais regionais
-     (RioVagas, Rio Emprega, Rio Empregos, VagasRio), uma vez para cada palavra-chave.
-  4. Descarta vagas mais antigas que o número de dias informado (quando é possível
-     identificar a data de publicação) e ranqueia as demais por aderência ao
-     currículo (IA quando disponível, com justificativa por vaga; TF-IDF local como
-     alternativa), descartando também as vagas abaixo da nota mínima configurada.
-  5. Gera mensagens de candidatura personalizadas para as melhores vagas (se IA
-     disponível).
-  6. Salva os resultados em uma planilha Excel (.xlsx) formatada, com links
-     clicáveis, e mostra as melhores vagas no terminal, em formato colorido.
+  2. Pergunta/confirma os filtros de busca (cidade, bairro, palavra-chave, que
+     aceita várias separadas por vírgula, e nº de dias).
+  3. Busca vagas em Vagas.com, InfoJobs, Empregare, Empregando Brasil, Gupy,
+     Jooble (se configurado) e portais regionais. Indeed e LinkedIn ficam desativados
+     por padrão e são oferecidos como buscas manuais. Cada fonte mostra seu diagnóstico.
+  4. Remove duplicadas, descarta vagas antigas (quando há data), de outros estados
+     e fora da nota mínima. Ranqueia por aderência ao currículo: IA quando disponível
+     (com justificativa por vaga, lendo a descrição completa das melhores candidatas),
+     TF-IDF local como alternativa.
+  5. Reaproveita notas de execuções anteriores (cache) e marca as vagas NOVAS.
+  6. Gera mensagens de candidatura para as melhores vagas (se IA disponível e
+     --com-mensagens).
+  7. Salva os resultados em uma planilha Excel (.xlsx) e mostra as melhores vagas
+     no terminal.
+
+Dá para rodar sem nenhuma pergunta: veja --sim, --cidade, --cargo, --dias e --saida.
 """
+
+from __future__ import annotations
 
 import argparse
 import glob
 import os
-import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-
-from dateutil import parser as dateparser
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()  # lê variáveis de um arquivo .env na pasta do projeto, se existir
-
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")  # lê o .env da pasta do projeto, de onde quer que o script seja chamado
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
-from rich.prompt import Prompt, Confirm
 
-from resume_parser import analisar_curriculo
-from scrapers import (
-    buscar_vagas_linkedin,
-    buscar_vagas_indeed,
-    buscar_vagas_todos_wordpress,
-    buscar_vagas_vagas_com,
-    buscar_vagas_infojobs,
-)
-from matcher import ranquear_por_similaridade, ranquear
-from mensagem import gerar_mensagens_top
-from config import SITES_ATIVOS, CIDADES_RJ, NOTA_MINIMA_PADRAO, UF_ALVO
+import config
+import descricoes
 import ia
+from config import NOTA_MINIMA_PADRAO, SITES_ATIVOS, UF_ALVO
+from exportar import salvar_excel
+from filtros import (
+    dividir_palavras_chave,
+    enriquecer_vaga,
+    filtrar_encerradas,
+    filtrar_por_data,
+    filtrar_por_regiao,
+    idade_em_dias,
+    motivo_de_encerramento,
+    remover_duplicadas,
+)
+from habilitacao import filtrar_por_habilitacao, motivo_de_eliminacao
+from historico import Historico, chave_do_contexto
+from matcher import MOTIVO_SEM_IA, PROMPT_VERSAO, ranquear_detalhado, ranquear_por_similaridade
+from mensagem import gerar_mensagens_top
+from resume_parser import CurriculoInvalido, analisar_curriculo
+from intencao_busca import filtrar_por_intencao
+
+# A pasta scrapers/ tem um módulo por site. Se ela não estiver ao lado deste arquivo,
+# o programa avisa com clareza em vez de mostrar um erro técnico.
+try:
+    from scrapers import (
+        buscar_vagas_indeed,
+        buscar_vagas_infojobs,
+        buscar_vagas_linkedin,
+        buscar_vagas_todos_wordpress,
+        buscar_vagas_vagas_com,
+        buscar_vagas_empregare,
+        buscar_vagas_empregando_brasil,
+        buscar_vagas_jooble,
+        buscar_vagas_gupy,
+    )
+    from scrapers.diagnostico import limpar_todos as limpar_diagnosticos, obter as obter_diagnostico, listar as listar_diagnosticos
+    ERRO_SCRAPERS: ImportError | None = None
+except ImportError as _erro:
+    ERRO_SCRAPERS = _erro
+    buscar_vagas_indeed = buscar_vagas_infojobs = buscar_vagas_linkedin = None
+    buscar_vagas_todos_wordpress = buscar_vagas_vagas_com = None
+    buscar_vagas_empregare = buscar_vagas_empregando_brasil = buscar_vagas_jooble = buscar_vagas_gupy = None
+    limpar_diagnosticos = obter_diagnostico = listar_diagnosticos = None
 
 console = Console()
 
-SEPARADOR_TITULO_RE = re.compile(r"\s[–-]\s")
+
+def _cfg(nome: str, padrao):
+    return getattr(config, nome, padrao)
 
 
-def dividir_palavras_chave(texto: str) -> list[str]:
-    """Permite buscar vários cargos de uma vez, separados por vírgula."""
-    termos = [t.strip() for t in texto.split(",")]
-    return [t for t in termos if t]
-
+# ---------------------------------------------------------------------------
+# Entrada: perguntas, caminho do PDF, configuração da IA
+# ---------------------------------------------------------------------------
 
 def perguntar(pergunta: str, padrao: str | None) -> str:
     return Prompt.ask(f"[bold cyan]{pergunta}[/bold cyan]", default=padrao or "")
@@ -80,72 +116,80 @@ def _limpar_caminho(caminho: str) -> str:
     return caminho.strip().strip('"').strip("'")
 
 
-def resolver_caminho_pdf(caminho_informado: str | None) -> str:
-    """Garante um caminho válido para o PDF do currículo antes de continuar —
-    nunca deixa o script quebrar com um erro feio de arquivo não encontrado.
+def _listar_pdfs() -> list[tuple[str, str]]:
+    """(rótulo, caminho) dos PDFs da pasta atual ou, se não houver nenhum, da pasta
+    do projeto."""
+    nomes = sorted(glob.glob("*.pdf"))
+    if nomes:
+        return [(nome, nome) for nome in nomes]
+    return [(p.name, str(p)) for p in sorted(BASE_DIR.glob("*.pdf"))]
+
+
+def resolver_caminho_pdf(caminho_informado: str | None, automatico: bool = False) -> str:
+    """Garante um caminho válido para o PDF do currículo antes de continuar, sem
+    nunca deixar o script quebrar com um erro feio de arquivo não encontrado.
 
     - Se `caminho_informado` já existir, usa ele direto.
-    - Se não existir (ou não tiver sido informado), tenta ajudar:
-      encontra .pdf na pasta atual automaticamente (sugerindo se houver 1, ou
-      listando para escolher se houver vários) e, em último caso, pede o
-      caminho completo digitado."""
+    - Se não existir (ou não tiver sido informado), tenta ajudar: encontra .pdf na
+      pasta atual (sugerindo se houver 1, ou listando para escolher se houver vários)
+      e, em último caso, pede o caminho completo digitado.
+    - Com `automatico` (flag --sim) e um único PDF na pasta, usa esse sem perguntar."""
     if caminho_informado:
         caminho_informado = _limpar_caminho(caminho_informado)
         if os.path.isfile(caminho_informado):
             return caminho_informado
-        console.print(f"[yellow]Não encontrei o arquivo \"{caminho_informado}\".[/yellow]")
+        console.print(f"[yellow]Não encontrei o arquivo \"{escape(caminho_informado)}\".[/yellow]")
 
     while True:
-        pdfs_na_pasta = sorted(glob.glob("*.pdf"))
+        pdfs = _listar_pdfs()
 
-        if len(pdfs_na_pasta) == 1:
-            if Confirm.ask(f"Encontrei [bold]{pdfs_na_pasta[0]}[/bold] na pasta atual — usar esse arquivo?", default=True):
-                return pdfs_na_pasta[0]
-        elif len(pdfs_na_pasta) > 1:
-            console.print("\n[bold]Encontrei vários PDFs na pasta atual:[/bold]")
-            for i, nome in enumerate(pdfs_na_pasta, start=1):
-                console.print(f"  {i}. {nome}")
+        if len(pdfs) == 1:
+            if automatico or Confirm.ask(
+                f"Encontrei [bold]{escape(pdfs[0][0])}[/bold] na pasta, usar esse arquivo?", default=True
+            ):
+                return pdfs[0][1]
+        elif len(pdfs) > 1:
+            console.print("\n[bold]Encontrei vários PDFs na pasta:[/bold]")
+            for i, (rotulo, _) in enumerate(pdfs, start=1):
+                console.print(f"  {i}. {escape(rotulo)}")
             escolha = _limpar_caminho(
                 perguntar("Digite o número do currículo desejado, ou cole o caminho completo de outro arquivo", "1")
             )
-            if escolha.isdigit() and 1 <= int(escolha) <= len(pdfs_na_pasta):
-                return pdfs_na_pasta[int(escolha) - 1]
+            if escolha.isdigit() and 1 <= int(escolha) <= len(pdfs):
+                return pdfs[int(escolha) - 1][1]
             if os.path.isfile(escolha):
                 return escolha
-            console.print(f"[yellow]Não encontrei \"{escolha}\".[/yellow]")
+            console.print(f"[yellow]Não encontrei \"{escape(escolha)}\".[/yellow]")
             continue
 
         caminho_manual = _limpar_caminho(perguntar("Digite o caminho completo do PDF do currículo", ""))
         if os.path.isfile(caminho_manual):
             return caminho_manual
-        console.print(f"[red]Não encontrei \"{caminho_manual}\". Tente novamente.[/red]")
+        console.print(f"[red]Não encontrei \"{escape(caminho_manual)}\". Tente novamente.[/red]")
 
 
 def _salvar_env(chaves: dict) -> None:
-    """Salva (ou atualiza) o arquivo .env com as chaves informadas, preservando
-    outras variáveis que já estivessem lá."""
-    caminho_env = ".env"
-    linhas_existentes = {}
-    if os.path.isfile(caminho_env):
-        with open(caminho_env, "r", encoding="utf-8") as f:
-            for linha in f:
-                if "=" in linha and not linha.strip().startswith("#"):
-                    chave, _, valor = linha.strip().partition("=")
-                    linhas_existentes[chave] = valor
-
-    linhas_existentes.update(chaves)
-
-    with open(caminho_env, "w", encoding="utf-8") as f:
-        for chave, valor in linhas_existentes.items():
-            f.write(f"{chave}={valor}\n")
-
-    console.print(f"[bold green]✓[/bold green] Chave(s) salva(s) em [bold].env[/bold] — não vai precisar configurar de novo.")
+    """Salva (ou atualiza) o .env da pasta do projeto, preservando os comentários e
+    as outras variáveis que já estavam lá."""
+    caminho = BASE_DIR / ".env"
+    linhas = caminho.read_text(encoding="utf-8").splitlines() if caminho.is_file() else []
+    pendentes = dict(chaves)
+    novas = []
+    for linha in linhas:
+        nome = linha.split("=", 1)[0].strip()
+        if "=" in linha and not linha.lstrip().startswith("#") and nome in pendentes:
+            novas.append(f"{nome}={pendentes.pop(nome)}")
+        else:
+            novas.append(linha)
+    novas.extend(f"{nome}={valor}" for nome, valor in pendentes.items())
+    caminho.write_text("\n".join(novas).rstrip("\n") + "\n", encoding="utf-8")
+    console.print("[bold green]✓[/bold green] Chave(s) salva(s) em [bold].env[/bold]. Não vai precisar configurar de novo.")
 
 
 def configurar_ia_interativa() -> None:
-    """Se nenhuma chave de IA estiver configurada (nem por .env, nem por
-    variável de ambiente), explica os benefícios e oferece configurar uma
-    agora — sem precisar sair do script para editar arquivo nenhum."""
+    """Se nenhuma chave de IA estiver configurada (nem por .env, nem por variável de
+    ambiente), explica os benefícios e oferece configurar uma agora, sem precisar sair
+    do script para editar arquivo nenhum."""
     if ia.provedor_disponivel():
         return
 
@@ -157,8 +201,11 @@ def configurar_ia_interativa() -> None:
         "vaga exclusiva PCD) em vez de só comparar se o título parece parecido\n"
         "• Explica o motivo de cada nota\n"
         "• Pode gerar mensagens de candidatura prontas para copiar e enviar\n\n"
-        "O [bold]Gemini[/bold] (Google) é gratuito e não pede cartão de crédito — "
-        "crie uma chave em [bold]https://aistudio.google.com/apikey[/bold].",
+        "O [bold]Gemini[/bold] (Google) tem plano gratuito e não pede cartão de crédito. "
+        "Crie uma chave em [bold]https://aistudio.google.com/apikey[/bold].\n"
+        "[dim]Atenção: no plano gratuito o Google pode usar o que for enviado para melhorar seus "
+        "produtos. Por isso o AchaVagAI remove CPF, telefone, e-mail e endereço do currículo "
+        "antes de enviar (veja ANONIMIZAR_CURRICULO no config.py).[/dim]",
         title="[bold]Nenhuma IA configurada[/bold]",
         border_style="yellow",
     ))
@@ -171,241 +218,241 @@ def configurar_ia_interativa() -> None:
     chaves_coletadas = {}
 
     while True:
-        escolha = Prompt.ask(
-            "Qual provedor você quer configurar",
-            choices=["gemini", "claude"],
-            default="gemini",
-        )
+        escolha = Prompt.ask("Qual provedor você quer configurar", choices=["gemini", "claude"], default="gemini")
         nome_var, nome_exibicao = nomes_provedor[escolha]
-        chave_valor = Prompt.ask(f"Cole sua chave do {nome_exibicao}").strip()
+        console.print("[dim](a chave não aparece na tela enquanto você cola; é normal)[/dim]")
+        chave_valor = Prompt.ask(f"Cole sua chave do {nome_exibicao}", password=True).strip()
 
         if chave_valor:
             chaves_coletadas[nome_var] = chave_valor
             os.environ[nome_var] = chave_valor
             console.print(f"[green]✓[/green] {nome_exibicao} configurado para esta execução.")
         else:
-            console.print("[yellow]Nenhuma chave informada — pulando.[/yellow]")
+            console.print("[yellow]Nenhuma chave informada, pulando.[/yellow]")
 
-        if not Confirm.ask("Quer adicionar outra chave também (ex.: como alternativa)?", default=False):
+        if not Confirm.ask("Quer adicionar a chave de outro provedor também (ex.: como alternativa)?", default=False):
             break
 
     if chaves_coletadas:
         _salvar_env(chaves_coletadas)
 
 
-def montar_filtros(perfil) -> dict:
-    console.print("\n[bold]--- Confirme ou ajuste os filtros de busca ---[/bold] [dim](Enter mantém o valor sugerido)[/dim]")
-    cidade = perguntar("Cidade", perfil.cidade)
-    bairro = perguntar("Bairro (opcional, usado apenas na exibição)", perfil.bairro)
-    palavra_chave = perguntar(
-        "Palavra-chave / cargo desejado [dim](pode informar vários, separados por vírgula)[/dim]",
-        perfil.cargo_sugerido,
-    )
-    dias = perguntar("Considerar vagas publicadas até quantos dias atrás?", "30")
-    return {"cidade": cidade, "bairro": bairro, "palavra_chave": palavra_chave, "dias": dias}
+def montar_filtros(perfil, args=None) -> dict:
+    """Pergunta os filtros de busca. Valores passados por linha de comando
+    (--cidade, --bairro, --cargo, --dias) não são perguntados; com --sim, os demais
+    assumem a sugestão do currículo sem perguntar."""
+    automatico = bool(args and getattr(args, "sim", False))
+
+    def valor(opcao, pergunta, padrao):
+        if opcao is not None:
+            return str(opcao)
+        if automatico:
+            return padrao or ""
+        return perguntar(pergunta, padrao)
+
+    if not automatico:
+        console.print("\n[bold]--- Confirme ou ajuste os filtros de busca ---[/bold] [dim](Enter mantém o valor sugerido)[/dim]")
+    return {
+        "cidade": valor(getattr(args, "cidade", None), "Cidade", perfil.cidade),
+        "bairro": valor(getattr(args, "bairro", None), "Bairro (opcional, usado apenas na exibição)", perfil.bairro),
+        "palavra_chave": valor(
+            getattr(args, "cargo", None),
+            "Palavra-chave / cargo desejado [dim](pode informar vários, separados por vírgula)[/dim]",
+            perfil.cargo_sugerido,
+        ),
+        "dias": valor(getattr(args, "dias", None), "Considerar vagas publicadas até quantos dias atrás?", "30"),
+    }
 
 
-def buscar_todas_vagas(filtros: dict) -> list:
-    termos = dividir_palavras_chave(filtros["palavra_chave"]) or [""]
-    todas_vagas = []
+# ---------------------------------------------------------------------------
+# Busca nos sites
+# ---------------------------------------------------------------------------
 
-    fontes = [
+def _montar_fontes(filtros: dict) -> list[tuple[str, object]]:
+    """Lista de (nome do site, função que recebe o termo e devolve as vagas)."""
+    cidade = filtros["cidade"]
+    fontes = []
+    for chave, nome, funcao in (
         ("linkedin", "LinkedIn", buscar_vagas_linkedin),
         ("indeed", "Indeed", buscar_vagas_indeed),
         ("vagas_com", "Vagas.com", buscar_vagas_vagas_com),
         ("infojobs", "InfoJobs", buscar_vagas_infojobs),
-    ]
+    ):
+        if SITES_ATIVOS.get(chave):
+            fontes.append((nome, lambda termo, f=funcao: f(termo, cidade)))
+    for chave, nome, funcao in (
+        ("empregare", "Empregare", buscar_vagas_empregare),
+        ("empregando_brasil", "Empregando Brasil", buscar_vagas_empregando_brasil),
+        ("gupy", "Gupy", buscar_vagas_gupy),
+        ("jooble", "Jooble", buscar_vagas_jooble),
+    ):
+        if SITES_ATIVOS.get(chave) and funcao is not None:
+            fontes.append((nome, lambda termo, f=funcao: f(termo, cidade)))
+    # O grupo dos portais regionais decide sozinho quais sites usar (SITES_ATIVOS).
+    fontes.append(("Portais regionais", lambda termo: buscar_vagas_todos_wordpress(termo, SITES_ATIVOS)))
+    return fontes
 
+
+def _buscar_na_fonte(nome: str, funcao, termos: list[str]) -> dict:
+    """Roda todos os termos em UM site, um de cada vez (para respeitar a pausa entre
+    requisições do mesmo site). Um erro no site não derruba a busca nos outros."""
+    inicio = time.monotonic()
+    vagas, por_termo, erros = [], {}, []
     for termo in termos:
-        rotulo = termo or "(sem palavra-chave)"
-
-        for chave_config, nome_site, funcao_busca in fontes:
-            if not SITES_ATIVOS.get(chave_config):
-                continue
-            with console.status(f"[cyan]Buscando no {nome_site} — {rotulo}...[/cyan]"):
-                vagas = funcao_busca(termo, filtros["cidade"])
-            for vaga in vagas:
-                vaga.termo_busca = termo
-            if vagas:
-                console.print(f"  [green]✓[/green] {nome_site} ({rotulo}): [bold]{len(vagas)}[/bold] vaga(s)")
-            todas_vagas += vagas
-
-        with console.status(f"[cyan]Buscando nos portais regionais — {rotulo}...[/cyan]"):
-            vagas = buscar_vagas_todos_wordpress(termo, SITES_ATIVOS)
-        for vaga in vagas:
-            vaga.termo_busca = termo
-        console.print(f"  [green]✓[/green] Portais regionais ({rotulo}): [bold]{len(vagas)}[/bold] vaga(s)")
-        todas_vagas += vagas
-
-    return todas_vagas
-
-
-def remover_duplicadas(vagas: list) -> list:
-    vistos = set()
-    unicas = []
-    for vaga in vagas:
-        if vaga.link not in vistos:
-            vistos.add(vaga.link)
-            unicas.append(vaga)
-    return unicas
-
-
-UF_NA_CIDADE_RE = re.compile(r"/\s*([A-Z]{2})\b")
-
-
-def filtrar_por_regiao(vagas: list, uf_alvo: str = UF_ALVO) -> tuple[list, int]:
-    """Descarta vagas cujo campo `cidade` traga explicitamente um estado (UF)
-    diferente do configurado — ex.: "São Paulo / SP" é descartado se `uf_alvo` for
-    "RJ". Isso é feito no código (não só confiando na IA) porque a análise de IA
-    tratava localização apenas como uma preferência, não uma exclusão — e vagas de
-    outros estados chegavam a passar com nota razoável mesmo assim.
-
-    Vagas sem UF identificável no campo cidade (a maioria, já que muitos sites não
-    estruturam isso) NÃO são descartadas por este filtro — segue tudo para a IA/
-    TF-IDF avaliar normalmente. Retorna (vagas_filtradas, quantidade_removida)."""
-    filtradas = []
-    removidas = 0
-    for vaga in vagas:
-        match = UF_NA_CIDADE_RE.search(vaga.cidade or "")
-        if match and match.group(1).upper() != uf_alvo.upper():
-            removidas += 1
+        try:
+            achadas = list(funcao(termo) or [])
+        except Exception as erro:  # um scraper quebrado (site mudou) não pode parar tudo
+            erros.append(f"{erro.__class__.__name__}: {erro}")
             continue
-        filtradas.append(vaga)
-    return filtradas, removidas
+        for vaga in achadas:
+            vaga.termo_busca = termo
+        por_termo[termo or "(sem palavra-chave)"] = len(achadas)
+        vagas += achadas
+    # Uma mesma vaga pode aparecer em várias buscas do mesmo portal quando o
+    # usuário informa vários cargos. Exibe e devolve a contagem já deduplicada.
+    vagas = remover_duplicadas(vagas)
+    return {"nome": nome, "vagas": vagas, "por_termo": por_termo, "erros": erros, "segundos": time.monotonic() - inicio}
 
 
-def _idade_em_dias(data_publicacao: str) -> int | None:
-    """Calcula há quantos dias a vaga foi publicada. Retorna None se a data
-    estiver vazia ou em um formato não reconhecido (nesse caso, a vaga não é
-    descartada pelo filtro de data — não dá pra confirmar que está velha)."""
-    if not data_publicacao:
-        return None
-    try:
-        data = dateparser.parse(data_publicacao)
-    except (ValueError, OverflowError, TypeError):
-        return None
-    if data is None:
-        return None
-    agora = datetime.now(data.tzinfo) if data.tzinfo else datetime.now()
-    return (agora - data).days
+def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
+    nome, quantidade = escape(resultado["nome"]), len(resultado["vagas"])
+    detalhe = ""
+    if varios_termos and quantidade:
+        detalhe = " [dim](" + ", ".join(f"{escape(t)}: {n}" for t, n in resultado["por_termo"].items()) + ")[/dim]"
+    tempo = f" [dim]{resultado['segundos']:.0f}s[/dim]"
 
-
-def filtrar_por_data(vagas: list, dias_maximo: int) -> tuple[list, int, int]:
-    """Remove vagas cuja data de publicação seja mais antiga que `dias_maximo`.
-    Vagas sem data identificável são mantidas (não há como confirmar a idade),
-    mas contadas separadamente para informar o usuário.
-    Retorna (vagas_filtradas, quantidade_removida_por_idade, quantidade_sem_data)."""
-    filtradas = []
-    removidas_por_idade = 0
-    sem_data = 0
-
-    for vaga in vagas:
-        idade = _idade_em_dias(vaga.data_publicacao)
-        if idade is None:
-            sem_data += 1
-            filtradas.append(vaga)
-        elif idade <= dias_maximo:
-            filtradas.append(vaga)
+    if resultado["erros"] and not quantidade:
+        console.print(f"  [red]✗[/red] {nome}: falhou. [dim]{escape(resultado['erros'][0][:160])}[/dim]")
+    elif quantidade:
+        console.print(f"  [green]✓[/green] {nome}: [bold]{quantidade}[/bold] vaga(s){detalhe}{tempo}")
+        if resultado["erros"]:
+            console.print(f"    [yellow]Algumas buscas falharam:[/yellow] [dim]{escape(resultado['erros'][0][:160])}[/dim]")
+    else:
+        estado = {}
+        if obter_diagnostico:
+            if resultado["nome"] == "Portais regionais" and listar_diagnosticos:
+                nomes_regionais = {"RioVagas", "Rio Emprega", "Rio Empregos", "VagasRio"}
+                itens = [d for d in listar_diagnosticos() if d.get("fonte") in nomes_regionais]
+                prioridades = {"estrutura_alterada": 5, "bloqueio": 4, "erro_http": 3,
+                               "erro_rede": 2, "configuracao_ausente": 1, "sem_resultados": 0}
+                estado = max(itens, key=lambda d: prioridades.get(d.get("status"), -1), default={})
+            else:
+                estado = obter_diagnostico(resultado["nome"])
+        status = estado.get("status", "sem_diagnostico")
+        detalhe_estado = estado.get("detalhe", "")
+        if status == "sem_resultados":
+            explicacao = "página/API reconhecida; a fonte informou que não há resultados"
+        elif status == "estrutura_alterada":
+            explicacao = "possível mudança no HTML; extrator alternativo não reconheceu os cartões"
+            if estado.get("snapshot"):
+                detalhe_estado += f" | DOM estrutural: {estado['snapshot']}"
+        elif status == "bloqueio":
+            explicacao = "acesso bloqueado ou CAPTCHA; nenhuma tentativa de contornar a proteção"
+        elif status == "erro_http":
+            explicacao = "erro HTTP devolvido pelo portal"
+        elif status == "erro_rede":
+            explicacao = "falha de conexão/timeout"
+        elif status == "configuracao_ausente":
+            explicacao = "fonte opcional não configurada"
+        elif status == "resposta_vazia":
+            explicacao = "resposta vazia ou curta demais para identificar a página"
         else:
-            removidas_por_idade += 1
+            explicacao = "nenhum anúncio foi extraído; a causa não foi identificada"
+        console.print(f"  [yellow]-[/yellow] {nome}: 0 vaga(s){tempo} [dim]({explicacao})[/dim]")
+        if detalhe_estado:
+            console.print(f"    [dim]{escape(detalhe_estado[:260])}[/dim]")
 
-    return filtradas, removidas_por_idade, sem_data
 
+def buscar_todas_vagas(filtros: dict) -> list:
+    termos = dividir_palavras_chave(filtros["palavra_chave"]) or [""]
+    fontes = _montar_fontes(filtros)
+    resultados: dict[str, dict] = {}
+    if limpar_diagnosticos:
+        limpar_diagnosticos()
 
-def enriquecer_vaga(vaga):
-    """Tenta preencher empresa/cidade quando vieram vazias, usando o padrão
-    "Cargo – Empresa – Local" do próprio título e a lista de cidades conhecidas."""
-    partes = SEPARADOR_TITULO_RE.split(vaga.titulo)
-
-    if not vaga.empresa and len(partes) >= 3:
-        vaga.empresa = partes[1].strip()
-
-    if not vaga.cidade:
-        candidata = partes[-1].strip() if len(partes) >= 2 else ""
-        if "RJ" in candidata or any(cidade.lower() in candidata.lower() for cidade in CIDADES_RJ):
-            vaga.cidade = candidata
+    paralelo = bool(_cfg("BUSCA_PARALELA", True)) and len(fontes) > 1
+    rotulo = ", ".join(t or "(sem palavra-chave)" for t in termos)
+    with console.status(f"[cyan]Buscando em {len(fontes)} fonte(s): {escape(rotulo)}...[/cyan]"):
+        if paralelo:
+            pool = ThreadPoolExecutor(max_workers=len(fontes))
+            try:
+                futuros = [pool.submit(_buscar_na_fonte, nome, funcao, termos) for nome, funcao in fontes]
+                for futuro in as_completed(futuros):
+                    resultado = futuro.result()
+                    resultados[resultado["nome"]] = resultado
+                    _relatar_fonte(resultado, len(termos) > 1)
+            except KeyboardInterrupt:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            else:
+                pool.shutdown()
         else:
-            cidade_no_titulo = next(
-                (cidade for cidade in CIDADES_RJ if cidade.lower() in vaga.titulo.lower()), None
-            )
-            if cidade_no_titulo:
-                vaga.cidade = cidade_no_titulo
+            for nome, funcao in fontes:
+                resultado = _buscar_na_fonte(nome, funcao, termos)
+                resultados[nome] = resultado
+                _relatar_fonte(resultado, len(termos) > 1)
 
-    return vaga
+    # Junta na ordem fixa das fontes, para o resultado não depender de quem terminou antes.
+    todas = []
+    for nome, _ in fontes:
+        todas += resultados[nome]["vagas"]
 
-
-def salvar_excel(ranking: list, mensagens: list, caminho: str) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Vagas"
-
-    colunas = ["Pontuação (%)", "Cargo / Título", "Empresa", "Cidade", "Publicada em", "Fonte", "Motivo (IA)", "Link"]
-    ws.append(colunas)
-    _formatar_cabecalho(ws, len(colunas))
-
-    for vaga, pontuacao, motivo in ranking:
-        vaga = enriquecer_vaga(vaga)
-        ws.append([pontuacao, vaga.titulo, vaga.empresa, vaga.cidade, vaga.data_publicacao, vaga.fonte, motivo, vaga.link])
-        numero_linha = ws.max_row
-        celula_link = ws.cell(row=numero_linha, column=8)
-        celula_link.hyperlink = vaga.link
-        celula_link.font = Font(color="0563C1", underline="single")
-        ws.cell(row=numero_linha, column=1).alignment = Alignment(horizontal="center")
-
-    larguras = {1: 14, 2: 50, 3: 26, 4: 20, 5: 16, 6: 14, 7: 45, 8: 55}
-    for col_idx, largura in larguras.items():
-        ws.column_dimensions[get_column_letter(col_idx)].width = largura
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:H{ws.max_row}"
-
-    if mensagens:
-        ws2 = wb.create_sheet("Mensagens de Candidatura")
-        colunas2 = ["Cargo / Título", "Link", "Mensagem sugerida"]
-        ws2.append(colunas2)
-        _formatar_cabecalho(ws2, len(colunas2))
-        for vaga, _pontuacao, mensagem in mensagens:
-            ws2.append([vaga.titulo, vaga.link, mensagem])
-            numero_linha = ws2.max_row
-            celula_link = ws2.cell(row=numero_linha, column=2)
-            celula_link.hyperlink = vaga.link
-            celula_link.font = Font(color="0563C1", underline="single")
-            ws2.cell(row=numero_linha, column=3).alignment = Alignment(wrap_text=True, vertical="top")
-        ws2.column_dimensions["A"].width = 45
-        ws2.column_dimensions["B"].width = 50
-        ws2.column_dimensions["C"].width = 90
-        ws2.freeze_panes = "A2"
-
-    wb.save(caminho)
+    # Indeed e LinkedIn proíbem scraping automatizado sem autorização expressa.
+    # Em vez de insistir em bloqueios, o AchaVagAI oferece atalhos de busca manual.
+    from urllib.parse import urlencode
+    cidade_url = filtros.get("cidade", "Rio de Janeiro")
+    termos_url = filtros.get("palavra_chave", "")
+    if not SITES_ATIVOS.get("indeed", False) or not SITES_ATIVOS.get("linkedin", False):
+        console.print("\n[dim]Portais com automação desativada por padrão (consulte os resultados manualmente):[/dim]")
+        if not SITES_ATIVOS.get("indeed", False):
+            url = "https://br.indeed.com/jobs?" + urlencode({"q": termos_url, "l": cidade_url})
+            console.print(f"  Indeed: [link={url}]{url}[/link]")
+        if not SITES_ATIVOS.get("linkedin", False):
+            url = "https://www.linkedin.com/jobs/search/?" + urlencode({"keywords": termos_url, "location": cidade_url})
+            console.print(f"  LinkedIn: [link={url}]{url}[/link]")
+    return todas
 
 
-def _formatar_cabecalho(ws, n_colunas: int) -> None:
-    cabecalho_fonte = Font(bold=True, color="FFFFFF")
-    cabecalho_fundo = PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid")
-    for col_idx in range(1, n_colunas + 1):
-        celula = ws.cell(row=1, column=col_idx)
-        celula.font = cabecalho_fonte
-        celula.fill = cabecalho_fundo
-        celula.alignment = Alignment(horizontal="center", vertical="center")
-
+# ---------------------------------------------------------------------------
+# Saída na tela
+# ---------------------------------------------------------------------------
 
 def exibir_perfil(perfil) -> None:
     tabela = Table(show_header=False, box=None, padding=(0, 1))
-    tabela.add_row("[bold]Nome:[/bold]", perfil.nome or "[dim]não identificado[/dim]")
-    tabela.add_row("[bold]Cidade:[/bold]", perfil.cidade or "[dim]não identificada[/dim]")
-    tabela.add_row("[bold]Bairro:[/bold]", perfil.bairro or "[dim]não identificado[/dim]")
-    tabela.add_row("[bold]Habilidades:[/bold]", ", ".join(perfil.habilidades) or "[dim]nenhuma identificada[/dim]")
-    tabela.add_row("[bold]Cargo sugerido:[/bold]", perfil.cargo_sugerido or "[dim]não identificado[/dim]")
+    tabela.add_row("[bold]Nome:[/bold]", escape(perfil.nome) if perfil.nome else "[dim]não identificado[/dim]")
+    tabela.add_row("[bold]Cidade:[/bold]", escape(perfil.cidade) if perfil.cidade else "[dim]não identificada[/dim]")
+    tabela.add_row("[bold]Bairro:[/bold]", escape(perfil.bairro) if perfil.bairro else "[dim]não identificado[/dim]")
+    tabela.add_row(
+        "[bold]CNH:[/bold]",
+        escape(", ".join(perfil.cnh)) if perfil.cnh else "[dim]não informada no currículo[/dim]",
+    )
+    tabela.add_row(
+        "[bold]Habilidades:[/bold]",
+        escape(", ".join(perfil.habilidades)) if perfil.habilidades else "[dim]nenhuma identificada[/dim]",
+    )
+    tabela.add_row(
+        "[bold]Cargo sugerido:[/bold]",
+        escape(perfil.cargo_sugerido) if perfil.cargo_sugerido else "[dim]não identificado[/dim]",
+    )
+    if getattr(perfil, "areas_atuacao", None):
+        tabela.add_row("[bold]Áreas comprovadas:[/bold]", escape(", ".join(perfil.areas_atuacao[:5])))
+    if getattr(perfil, "cargos_compativeis", None):
+        tabela.add_row("[bold]Cargos compatíveis:[/bold]", escape(", ".join(perfil.cargos_compativeis[:6])))
     if perfil.senioridade:
-        tabela.add_row("[bold]Senioridade:[/bold]", perfil.senioridade)
+        tabela.add_row("[bold]Senioridade:[/bold]", escape(perfil.senioridade))
     if perfil.resumo:
-        tabela.add_row("[bold]Resumo:[/bold]", perfil.resumo)
+        tabela.add_row("[bold]Resumo:[/bold]", escape(perfil.resumo))
     titulo = "Currículo analisado" + (" (via IA)" if perfil.extraido_por_ia else " (extração local)")
     console.print(Panel(tabela, title=f"[bold white]{titulo}[/bold white]", border_style="cyan"))
     if perfil.erro_ia:
-        console.print(f"[yellow]A extração por IA do currículo falhou — usei a extração local acima. Motivo: {perfil.erro_ia}[/yellow]")
+        console.print(
+            "[yellow]A extração por IA do currículo falhou, então usei a extração local acima. "
+            f"Motivo: {escape(perfil.erro_ia)}[/yellow]"
+        )
 
 
-def exibir_resultados(ranking: list, top_n: int) -> None:
+def exibir_resultados(ranking: list, top_n: int, novas: set[int] | None = None) -> None:
+    novas = novas or set()
     tabela = Table(title=f"Top {min(top_n, len(ranking))} vagas mais compatíveis", header_style="bold white on dark_cyan")
     tabela.add_column("Nota", justify="center", width=6)
     tabela.add_column("Vaga", style="bold")
@@ -414,14 +461,23 @@ def exibir_resultados(ranking: list, top_n: int) -> None:
     tabela.add_column("Motivo (IA)", style="dim italic")
 
     for vaga, pontuacao, motivo in ranking[:top_n]:
-        vaga = enriquecer_vaga(vaga)
         cor_nota = "green" if pontuacao >= 60 else ("yellow" if pontuacao >= 35 else "red")
-        tabela.add_row(f"[{cor_nota}]{pontuacao:.0f}[/{cor_nota}]", vaga.titulo, vaga.cidade or "-", vaga.fonte, motivo or "-")
+        titulo = escape(vaga.titulo or "-")
+        if id(vaga) in novas:
+            titulo = "[bold green]NOVA[/bold green] " + titulo
+        tabela.add_row(
+            f"[{cor_nota}]{pontuacao:.0f}[/{cor_nota}]",
+            titulo,
+            escape(vaga.cidade or "-"),
+            escape(vaga.fonte or "-"),
+            escape(motivo or "-"),
+        )
     console.print(tabela)
 
     console.print("\n[bold]Links para candidatura:[/bold]")
     for i, (vaga, _pontuacao, _motivo) in enumerate(ranking[:top_n], start=1):
-        console.print(f"  {i}. [link={vaga.link}]{vaga.link}[/link]")
+        destino = (vaga.link or "").replace("[", "%5B").replace("]", "%5D")
+        console.print(f"  {i}. [link={destino}]{escape(vaga.link or '-')}[/link]")
 
 
 def exibir_mensagens(mensagens: list) -> None:
@@ -429,42 +485,126 @@ def exibir_mensagens(mensagens: list) -> None:
         return
     console.print("\n[bold magenta]--- Mensagens de candidatura sugeridas (top vagas) ---[/bold magenta]")
     for vaga, _pontuacao, mensagem in mensagens:
-        console.print(Panel(mensagem, title=f"[bold]{vaga.titulo}[/bold]", border_style="magenta", subtitle=vaga.link))
+        console.print(Panel(
+            escape(mensagem),
+            title=f"[bold]{escape(vaga.titulo or '-')}[/bold]",
+            border_style="magenta",
+            subtitle=escape(vaga.link or ""),
+        ))
 
 
-def main():
+# ---------------------------------------------------------------------------
+# Programa
+# ---------------------------------------------------------------------------
+
+def criar_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AchaVagAI - encontra vagas combinando com seu currículo")
-    parser.add_argument("curriculo_pdf", nargs="?", default=None, help="Caminho para o arquivo PDF do currículo (se não informado, o script ajuda a encontrar)")
-    parser.add_argument("--sem-ia", action="store_true", help="Desativa toda a análise de IA (ranking, extração de perfil e mensagens), mesmo com chave configurada.")
-    parser.add_argument("--com-mensagens", action="store_true", help="Gera mensagens de candidatura personalizadas para as melhores vagas (desativado por padrão — usa chamadas extras de IA).")
+    parser.add_argument("curriculo_pdf", nargs="?", default=None,
+                        help="Caminho para o arquivo PDF do currículo (se não informado, o script ajuda a encontrar)")
+    parser.add_argument("--sem-ia", action="store_true",
+                        help="Desativa toda a análise de IA (ranking, extração de perfil e mensagens), mesmo com chave configurada.")
+    parser.add_argument("--com-mensagens", action="store_true",
+                        help="Gera mensagens de candidatura personalizadas para as melhores vagas (desativado por padrão, usa chamadas extras de IA).")
     parser.add_argument("--top", type=int, default=15, help="Quantas vagas mostrar no resumo final (padrão: 15)")
-    parser.add_argument("--top-mensagens", type=int, default=5, help="Para quantas vagas do topo gerar mensagem de candidatura (padrão: 5)")
-    parser.add_argument("--nota-minima", type=float, default=NOTA_MINIMA_PADRAO, help=f"Nota mínima (0-100) para uma vaga aparecer nos resultados (padrão: {NOTA_MINIMA_PADRAO})")
-    args = parser.parse_args()
+    parser.add_argument("--top-mensagens", type=int, default=5,
+                        help="Para quantas vagas do topo gerar mensagem de candidatura (padrão: 5)")
+    parser.add_argument("--nota-minima", type=float, default=None,
+                        help=f"Nota mínima (0-100) para uma vaga aparecer nos resultados (padrão: {NOTA_MINIMA_PADRAO} com IA; "
+                             "sem IA a nota mínima não é aplicada)")
+    parser.add_argument("--sim", action="store_true",
+                        help="Não faz perguntas: aceita as sugestões do currículo para o que não for informado por flag.")
+    parser.add_argument("--cidade", default=None, help="Cidade da busca (pula a pergunta)")
+    parser.add_argument("--bairro", default=None, help="Bairro (pula a pergunta)")
+    parser.add_argument("--cargo", default=None, help="Cargo(s) a buscar, separados por vírgula (pula a pergunta)")
+    parser.add_argument("--dias", default=None, help="Idade máxima das vagas, em dias (pula a pergunta)")
+    parser.add_argument("--saida", default=None, help="Pasta onde salvar a planilha Excel (padrão: pasta atual)")
+    parser.add_argument("--sem-cache", action="store_true",
+                        help="Ignora as notas guardadas de execuções anteriores e pede tudo de novo à IA.")
+    parser.add_argument("--sem-analise-profunda", action="store_true",
+                        help="Não abre a página de cada vaga para ler a descrição completa (mais rápido, notas menos precisas).")
+    return parser
 
+
+def _mensagem_scrapers_ausentes() -> None:
+    if isinstance(ERRO_SCRAPERS, ModuleNotFoundError) and ERRO_SCRAPERS.name == "scrapers":
+        console.print(Panel(
+            "A pasta [bold]scrapers/[/bold] (os módulos que buscam em cada site) não está ao lado do "
+            "[bold]main.py[/bold].\n\n"
+            f"Pasta procurada: {escape(str(BASE_DIR))}\n\n"
+            "Coloque a pasta scrapers/ do seu projeto aqui e rode de novo. Se você extraiu a "
+            "atualização por cima da pasta antiga, ela deve estar lá. Se perdeu a pasta, reenvie o "
+            "projeto completo para ela ser recriada.",
+            title="[bold red]Falta a pasta scrapers[/bold red]",
+            border_style="red",
+        ))
+    else:
+        console.print(Panel(
+            "Não consegui carregar a pasta [bold]scrapers/[/bold]:\n"
+            f"{escape(f'{ERRO_SCRAPERS.__class__.__name__}: {ERRO_SCRAPERS}')}\n\n"
+            "Se for um pacote faltando, rode: [bold]pip install -r requirements.txt[/bold]",
+            title="[bold red]Erro ao carregar os scrapers[/bold red]",
+            border_style="red",
+        ))
+
+
+def _executar(args) -> None:
     if args.sem_ia:
-        os.environ.pop("GEMINI_API_KEY", None)
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+        ia.desativar()
+    # Começa direto pelo modelo que funcionou da última vez e mostra, uma vez só, por que
+    # algum modelo da lista foi deixado de lado.
+    ia.usar_arquivo_de_preferencia(BASE_DIR / _cfg("MODELO_PREFERIDO_ARQUIVO", ".achavagai_modelo.json"))
+    ia.aviso_callback = lambda texto: console.print(f"  [dim]{escape(texto)}[/dim]")
 
     console.rule("[bold cyan]ACHAVAGAI[/bold cyan]")
 
-    if not args.sem_ia:
+    if ERRO_SCRAPERS is not None:
+        _mensagem_scrapers_ausentes()
+        sys.exit(1)
+
+    if not args.sem_ia and not args.sim:
         configurar_ia_interativa()
 
-    caminho_pdf = resolver_caminho_pdf(args.curriculo_pdf)
+    caminho_pdf = resolver_caminho_pdf(args.curriculo_pdf, automatico=args.sim)
 
-    console.print(f"[dim]Lendo currículo:[/dim] {caminho_pdf}")
-    perfil = analisar_curriculo(caminho_pdf)
+    console.print(f"[dim]Lendo currículo:[/dim] {escape(caminho_pdf)}")
+    try:
+        perfil = analisar_curriculo(caminho_pdf)
+    except CurriculoInvalido as erro:
+        console.print(f"[red]{escape(str(erro))}[/red]")
+        sys.exit(1)
     exibir_perfil(perfil)
 
-    filtros = montar_filtros(perfil)
+    filtros = montar_filtros(perfil, args)
 
     console.print("\n[bold]--- Buscando vagas ---[/bold]")
-    vagas = remover_duplicadas(buscar_todas_vagas(filtros))
-    console.print(f"\n[bold]Total de vagas encontradas (após remover duplicadas):[/bold] {len(vagas)}")
+    bruto = buscar_todas_vagas(filtros)
+    vagas = remover_duplicadas(bruto)
+    console.print(
+        f"\n[bold]Total de vagas encontradas (após remover duplicadas):[/bold] {len(vagas)}"
+        + (f" [dim]({len(bruto) - len(vagas)} repetida(s) removida(s))[/dim]" if len(bruto) > len(vagas) else "")
+    )
 
     if not vagas:
         console.print("[red]Nenhuma vaga encontrada. Tente ajustar a palavra-chave ou verifique sua conexão.[/red]")
+        sys.exit(0)
+
+    for vaga in vagas:  # preenche empresa/cidade vazios ANTES de filtrar e de a IA avaliar
+        enriquecer_vaga(vaga)
+
+    termos_intencao = dividir_palavras_chave(filtros.get("palavra_chave", ""))
+    if termos_intencao:
+        vagas, descartadas_por_intencao = filtrar_por_intencao(vagas, termos_intencao)
+        if descartadas_por_intencao:
+            console.print(
+                f"[dim]{len(descartadas_por_intencao)} vaga(s) descartadas por não corresponderem "
+                f"ao título ou descrição dos cargos procurados ({escape(', '.join(termos_intencao))}).[/dim]"
+            )
+            for irrelevante in descartadas_por_intencao[:3]:
+                titulo = (irrelevante.titulo or "")[:85]
+                console.print(f"[dim]  • {escape(titulo)}[/dim]")
+
+    if not vagas:
+        console.print("[yellow]As fontes devolveram anúncios, mas nenhum correspondia aos cargos escolhidos. Revise as palavras-chave ou amplie os sinônimos.[/yellow]")
         sys.exit(0)
 
     try:
@@ -475,89 +615,266 @@ def main():
     if dias_maximo:
         vagas, removidas_por_idade, sem_data = filtrar_por_data(vagas, dias_maximo)
         if removidas_por_idade:
-            console.print(
-                f"[dim]{removidas_por_idade} vaga(s) publicada(s) há mais de {dias_maximo} dias foram descartadas.[/dim]"
-            )
+            console.print(f"[dim]{removidas_por_idade} vaga(s) publicada(s) há mais de {dias_maximo} dias foram descartadas.[/dim]")
         if sem_data:
-            console.print(
-                f"[dim]{sem_data} vaga(s) sem data identificável foram mantidas (não dá pra confirmar a idade).[/dim]"
-            )
+            console.print(f"[dim]{sem_data} vaga(s) sem data identificável foram mantidas (não dá pra confirmar a idade).[/dim]")
 
     if not vagas:
         console.print("[red]Nenhuma vaga passou do filtro de data. Tente aumentar o número de dias.[/red]")
         sys.exit(0)
 
+    if _cfg("FILTRAR_VAGAS_ENCERRADAS", True):
+        vagas, encerradas = filtrar_encerradas(vagas)
+        if encerradas:
+            console.print(
+                f"[dim]{len(encerradas)} vaga(s) já encerrada(s) foram descartadas "
+                "(a data de comparecimento, entrevista ou prazo escrita na vaga já passou):[/dim]"
+            )
+            for vaga_antiga, data_limite in encerradas[:3]:
+                titulo = vaga_antiga.titulo if len(vaga_antiga.titulo) <= 90 else vaga_antiga.titulo[:87] + "..."
+                console.print(f"[dim]  • {escape(titulo)} (data: {data_limite:%d/%m/%Y})[/dim]")
+            if len(encerradas) > 3:
+                console.print(f"[dim]  ... e mais {len(encerradas) - 3}.[/dim]")
+        if not vagas:
+            console.print("[red]Todas as vagas encontradas já estavam encerradas. Tente de novo mais tarde ou ajuste a busca.[/red]")
+            sys.exit(0)
+
     vagas, removidas_por_regiao = filtrar_por_regiao(vagas)
     if removidas_por_regiao:
         console.print(
             f"[dim]{removidas_por_regiao} vaga(s) de fora do estado {UF_ALVO} foram descartadas "
-            f"(ajustável em UF_ALVO no config.py).[/dim]"
+            "(ajustável em UF_ALVO no config.py).[/dim]"
         )
 
     if not vagas:
         console.print("[red]Nenhuma vaga passou do filtro de região. Tente ajustar UF_ALVO no config.py.[/red]")
         sys.exit(0)
 
+    usar_filtro_cnh = bool(_cfg("FILTRAR_POR_HABILITACAO", True) and perfil.cnh)
+    if usar_filtro_cnh:
+        vagas, sem_cnh = filtrar_por_habilitacao(vagas, perfil.cnh)
+        _avisar_descartadas_por_cnh(sem_cnh, perfil.cnh)
+        if not vagas:
+            console.print("[red]Todas as vagas encontradas exigem uma CNH que o currículo não informa.[/red]")
+            sys.exit(0)
+
+    def regra_depois_da_leitura(vaga) -> str | None:
+        """Regras que podem mudar depois de ler a página da vaga: a descrição completa pode
+        revelar a CNH exigida, e a página costuma ter a data de publicação (e o prazo)."""
+        if usar_filtro_cnh:
+            motivo = motivo_de_eliminacao(vaga, perfil.cnh)
+            if motivo:
+                return motivo
+        if dias_maximo:
+            idade = idade_em_dias(getattr(vaga, "data_publicacao", ""))
+            if idade is not None and idade > dias_maximo:
+                return f"publicada há {idade} dias (o limite é {dias_maximo})"
+        if _cfg("FILTRAR_VAGAS_ENCERRADAS", True):
+            return motivo_de_encerramento(vaga)
+        return None
+
+    # -- ranking ----------------------------------------------------------------
+    historico = Historico(
+        BASE_DIR / _cfg("HISTORICO_ARQUIVO", ".achavagai_historico.json"),
+        validade_dias=_cfg("CACHE_VALIDADE_DIAS", 14),
+        usar_cache=not args.sem_cache,
+    )
+    if historico.aviso:
+        console.print(f"[dim]{escape(historico.aviso)}[/dim]")
+
     provedor = ia.provedor_disponivel()
-    usou_ia = False
-    if provedor:
-        nome_provedor = "Gemini" if provedor == "gemini" else "Claude"
-        console.print(f"\n[bold magenta]Analisando vagas com IA ({nome_provedor}) — isso pode levar alguns segundos...[/bold magenta]")
-        with console.status("[magenta]Avaliando aderência ao currículo...[/magenta]"):
-            ranking, usou_ia = ranquear(perfil.texto_completo, vagas)
-        if not usou_ia:
-            motivo_erro = ia.ultimo_erro or "motivo desconhecido"
+    nome_provedor = ia.nome_provedor()
+    resultado = None
+    try:
+        if provedor:
+            contexto = {
+                "cidade": filtros["cidade"], "bairro": filtros["bairro"], "uf": UF_ALVO,
+                "cnh": ", ".join(perfil.cnh),
+                "termos_busca": termos_intencao,
+                "areas_atuacao": getattr(perfil, "areas_atuacao", []),
+                "cargos_compativeis": getattr(perfil, "cargos_compativeis", []),
+                "experiencias_relevantes": getattr(perfil, "experiencias_relevantes", []),
+                "formacao": getattr(perfil, "formacao", []),
+            }
+            chave_ctx = chave_do_contexto(perfil.texto_para_ia, contexto, PROMPT_VERSAO)
+            ia.aviso_callback = lambda texto: console.print(f"  [dim]{escape(texto)}[/dim]")
+
+            console.print(f"\n[bold magenta]Analisando vagas com IA ({nome_provedor}). Isso pode levar alguns instantes...[/bold magenta]")
+            with console.status("[magenta]Avaliando aderência ao currículo...[/magenta]") as status:
+                def analise_profunda(vagas_para_ia: list) -> None:
+                    if args.sem_analise_profunda or int(_cfg("QUANTIDADE_ANALISE_PROFUNDA", 25)) <= 0:
+                        return
+                    status.update("[magenta]Lendo a descrição completa das melhores candidatas...[/magenta]")
+                    estatisticas = descricoes.enriquecer_descricoes(
+                        vagas_para_ia,
+                        ao_avancar=lambda feitas, total: status.update(
+                            f"[magenta]Lendo a descrição completa das vagas ({feitas}/{total})...[/magenta]"
+                        ),
+                    )
+                    if estatisticas["tentadas"] or estatisticas["ignoradas"]:
+                        extra = f", {estatisticas['ignoradas']} de sites pulados de propósito (ex.: LinkedIn)" if estatisticas["ignoradas"] else ""
+                        console.print(
+                            f"  [dim]Descrição completa obtida para {estatisticas['enriquecidas']} de "
+                            f"{estatisticas['tentadas']} vaga(s) tentadas{extra}.[/dim]"
+                        )
+
+                def mostrar_lote(feitos: int, total: int) -> None:
+                    status.update(f"[magenta]Avaliando aderência ao currículo (lote {min(feitos + 1, total)} de {total})...[/magenta]")
+
+                resultado = ranquear_detalhado(
+                    perfil.texto_para_ia,
+                    vagas,
+                    contexto=contexto,
+                    cache_get=lambda vaga: historico.nota_em_cache(vaga, chave_ctx),
+                    cache_set=lambda vaga, nota, motivo: historico.guardar_avaliacao(vaga, chave_ctx, nota, motivo),
+                    antes_da_ia=analise_profunda,
+                    ao_avancar=mostrar_lote,
+                    eliminatoria=regra_depois_da_leitura,
+                )
+            ranking, usou_ia = resultado.ranking, resultado.usou_ia
+        else:
             console.print(
-                f"[yellow]A chamada à IA ({nome_provedor}) falhou nesta execução — usando ranking local "
-                f"(TF-IDF) como alternativa, sem justificativa por vaga.[/yellow]\n"
-                f"[dim]Motivo reportado: {motivo_erro}[/dim]"
+                "\n[yellow]Nenhuma chave de IA configurada, usando ranking local (TF-IDF), mais simples.[/yellow]\n"
+                "[dim]Para uma análise mais profunda e gratuita, crie uma chave em "
+                "https://aistudio.google.com/apikey e salve em um arquivo .env como GEMINI_API_KEY=sua-chave.[/dim]"
             )
-    else:
-        console.print(
-            "\n[yellow]Nenhuma chave de IA configurada — usando ranking local (TF-IDF), mais simples.[/yellow]\n"
-            "[dim]Para uma análise mais profunda e gratuita, crie uma chave em "
-            "https://aistudio.google.com/apikey, salve em um arquivo .env como GEMINI_API_KEY=sua-chave.[/dim]"
-        )
-        ranking = ranquear_por_similaridade(perfil.texto_completo, vagas)
+            ranking, usou_ia = ranquear_por_similaridade(perfil.texto_para_ia, vagas), False
+    finally:
+        ia.aviso_callback = None
+        historico.salvar()  # guarda as notas já obtidas, mesmo que algo tenha falhado depois
+
+    if resultado is not None:
+        _resumo_da_ia(resultado, nome_provedor)
+        _avisar_eliminadas_depois_da_leitura(resultado.eliminadas)
+
+    # -- nota mínima ------------------------------------------------------------
+    nota_minima = args.nota_minima
+    if nota_minima is None:
+        nota_minima = NOTA_MINIMA_PADRAO if usou_ia else 0.0
+        if not usou_ia:
+            console.print("[dim]Sem notas da IA, a nota mínima não foi aplicada (a pontuação local não é comparável). Use --nota-minima para forçar.[/dim]")
 
     total_antes_filtro = len(ranking)
     ranking_completo = ranking  # guarda a lista completa (antes do filtro) para diagnóstico, se precisar
-    ranking = [item for item in ranking if item[1] >= args.nota_minima]
+    ranking = [item for item in ranking if item[1] >= nota_minima or item[2] == MOTIVO_SEM_IA]
     descartadas = total_antes_filtro - len(ranking)
     if descartadas:
-        console.print(f"[dim]{descartadas} vaga(s) abaixo de {args.nota_minima:.0f}% de aderência foram descartadas (ajuste com --nota-minima).[/dim]")
+        console.print(f"[dim]{descartadas} vaga(s) abaixo de {nota_minima:.0f}% de aderência foram descartadas (ajuste com --nota-minima).[/dim]")
+
+    pasta_saida = Path(args.saida) if args.saida else Path(".")
+    nome_arquivo = pasta_saida / f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
     if not ranking:
         console.print(
-            f"[red]Nenhuma vaga passou do filtro de nota mínima ({args.nota_minima:.0f}%).[/red]\n"
-            "[yellow]Isso pode ser normal — ex.: se a vaga exige um requisito que seu currículo não "
+            f"[red]Nenhuma vaga passou do filtro de nota mínima ({nota_minima:.0f}%).[/red]\n"
+            "[yellow]Isso pode ser normal: se a vaga exige um requisito que seu currículo não "
             "atende (CNH de categoria diferente, curso técnico específico etc.), a IA reprova mesmo que "
             "o título pareça relacionado.[/yellow]\n"
             "[dim]Veja abaixo as vagas com maior nota mesmo assim, para entender o motivo:[/dim]"
         )
         exibir_resultados(ranking_completo, min(5, len(ranking_completo)))
-        console.print(
-            "\n[dim]Se quiser ver todas mesmo abaixo da nota mínima, rode de novo com --nota-minima 0.[/dim]"
-        )
-        nome_arquivo = f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-        salvar_excel(ranking_completo, [], nome_arquivo)
-        console.print(f"\n[bold green]✓[/bold green] Mesmo assim, salvei todas as vagas avaliadas (com nota e motivo) em: [bold]{nome_arquivo}[/bold]")
+        console.print("\n[dim]Se quiser ver todas mesmo abaixo da nota mínima, rode de novo com --nota-minima 0.[/dim]")
+        salvo = salvar_excel(ranking_completo, [], nome_arquivo)
+        console.print(f"\n[bold green]✓[/bold green] Mesmo assim, salvei todas as vagas avaliadas (com nota e motivo) em: [bold]{escape(str(salvo))}[/bold]")
         sys.exit(0)
 
+    novas = {id(vaga) for vaga, _, _ in ranking if historico.eh_nova(vaga)}
+    if novas:
+        console.print(f"[dim]{len(novas)} vaga(s) nova(s) desde a última execução estão marcadas como NOVA.[/dim]")
+
     console.print()
-    exibir_resultados(ranking, args.top)
+    exibir_resultados(ranking, args.top, novas)
 
     mensagens = []
     if provedor and args.com_mensagens:
         console.print(f"\n[bold magenta]Gerando mensagens de candidatura para as top {args.top_mensagens} vagas...[/bold magenta]")
         with console.status("[magenta]Escrevendo mensagens personalizadas...[/magenta]"):
-            mensagens = gerar_mensagens_top(perfil.texto_completo, ranking, quantidade=args.top_mensagens)
+            mensagens = gerar_mensagens_top(perfil.texto_para_ia, ranking, quantidade=args.top_mensagens)
         exibir_mensagens(mensagens)
 
-    nome_arquivo = f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    salvar_excel(ranking, mensagens, nome_arquivo)
-    console.print(f"\n[bold green]✓[/bold green] Resultados completos salvos em: [bold]{nome_arquivo}[/bold]")
-    console.print("[dim]Abra no Excel — os links já são clicáveis; mensagens de candidatura ficam na segunda aba.[/dim]")
+    salvo = salvar_excel(ranking, mensagens, nome_arquivo, novas)
+    console.print(f"\n[bold green]✓[/bold green] Resultados completos salvos em: [bold]{escape(str(salvo))}[/bold]")
+    console.print("[dim]Abra no Excel: os links já são clicáveis; mensagens de candidatura ficam na segunda aba.[/dim]")
+
+    historico.registrar_vistas([vaga for vaga, _, _ in ranking])
+    historico.salvar()
+
+
+def _avisar_descartadas_por_cnh(descartadas: list, categorias, depois_da_analise: bool = False) -> None:
+    """Mostra quantas vagas saíram por exigirem CNH que o currículo não informa, com exemplos."""
+    if not descartadas:
+        return
+    quando = " depois de ler a descrição completa" if depois_da_analise else ""
+    console.print(
+        f"[dim]{len(descartadas)} vaga(s) descartada(s){quando} por exigirem uma CNH que o seu currículo "
+        f"não informa (currículo: {escape(', '.join(categorias))}). Exemplos:[/dim]"
+    )
+    for vaga, motivo in descartadas[:3]:
+        titulo = vaga.titulo if len(vaga.titulo) <= 70 else vaga.titulo[:67] + "..."
+        console.print(f"[dim]  • {escape(titulo)}: {escape(motivo)}[/dim]")
+    if len(descartadas) > 3:
+        console.print(f"[dim]  ... e mais {len(descartadas) - 3}. Para desligar: FILTRAR_POR_HABILITACAO = False no config.py.[/dim]")
+
+
+def _avisar_eliminadas_depois_da_leitura(eliminadas: list) -> None:
+    """Vagas que só foram descartadas depois de ler a página: CNH exigida, data de publicação
+    antiga (a lista de resultados não trazia a data) ou prazo vencido."""
+    if not eliminadas:
+        return
+    console.print(
+        f"[dim]{len(eliminadas)} vaga(s) descartada(s) depois de ler a página da vaga "
+        "(CNH exigida, data de publicação ou prazo). Exemplos:[/dim]"
+    )
+    for vaga, motivo in eliminadas[:3]:
+        titulo = vaga.titulo if len(vaga.titulo) <= 70 else vaga.titulo[:67] + "..."
+        console.print(f"[dim]  • {escape(titulo)}: {escape(motivo)}[/dim]")
+    if len(eliminadas) > 3:
+        console.print(f"[dim]  ... e mais {len(eliminadas) - 3}.[/dim]")
+
+
+def _resumo_da_ia(resultado, nome_provedor: str | None) -> None:
+    """Conta ao usuário o que a IA fez (ou por que não fez)."""
+    if resultado.usou_ia:
+        partes = []
+        if resultado.avaliadas_ia:
+            partes.append(f"{resultado.avaliadas_ia} vaga(s) avaliada(s) agora")
+        if resultado.do_cache:
+            partes.append(f"{resultado.do_cache} reaproveitada(s) do histórico (sem gastar a IA)")
+        modelo = f" / {ia.modelo_usado}" if ia.modelo_usado else ""
+        console.print(f"[dim]IA ({nome_provedor}{escape(modelo)}): {', '.join(partes)}.[/dim]")
+        if resultado.sem_nota_ia:
+            console.print(
+                f"[yellow]{resultado.sem_nota_ia} vaga(s) ficaram sem nota da IA ({resultado.lotes_com_falha} "
+                "lote(s) falharam) e aparecem no fim da lista, com pontuação local.[/yellow]\n"
+                f"[dim]Motivo reportado: {escape(resultado.erro or 'motivo desconhecido')}[/dim]"
+            )
+        if resultado.realinhadas:
+            console.print(f"[dim]A IA colocou {resultado.realinhadas} nota(s) na vaga errada; corrigi conferindo o título.[/dim]")
+        if resultado.sem_correspondencia:
+            console.print(
+                f"[dim]{resultado.sem_correspondencia} avaliação(ões) da IA não correspondiam a nenhuma vaga do lote "
+                "e foram ignoradas (a vaga foi pedida de novo ou ficou sem nota).[/dim]"
+            )
+        if resultado.fora_do_limite:
+            console.print(
+                f"[dim]{resultado.fora_do_limite} vaga(s) de menor afinidade textual ficaram fora da análise da IA "
+                f"(limite IA_TOP_ANALISE no config.py). Rodando de novo, as próximas entram.[/dim]"
+            )
+    else:
+        console.print(
+            f"[yellow]A chamada à IA ({nome_provedor}) falhou nesta execução, então usei o ranking local "
+            "(TF-IDF), sem justificativa por vaga.[/yellow]\n"
+            f"[dim]Motivo reportado: {escape(resultado.erro or ia.ultimo_erro or 'motivo desconhecido')}[/dim]"
+        )
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = criar_parser().parse_args(argv)
+    try:
+        _executar(args)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrompido pelo usuário.[/yellow]")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

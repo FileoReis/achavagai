@@ -1,6 +1,9 @@
 """
 Configurações gerais do AchaVagAI.
 Ajuste as listas abaixo conforme sua região / área de atuação.
+
+Importante: não renomeie nem apague as variáveis existentes. Os módulos da pasta
+scrapers/ também leem este arquivo.
 """
 
 # User-Agent "de navegador" para reduzir bloqueios simples de scraping.
@@ -40,11 +43,13 @@ CIDADES_RJ = [
 
 # Bairros comuns (principalmente zona sul/centro/zona norte do Rio) para apoio
 # ao parser. Adicione os bairros relevantes para você.
+# "Centro" fica por último porque a palavra aparece em muitos textos que não são
+# bairro (ex.: "centro de distribuição"), e o primeiro item encontrado é o escolhido.
 BAIRROS_RJ = [
-    "Centro", "Copacabana", "Ipanema", "Leblon", "Botafogo", "Flamengo",
+    "Copacabana", "Ipanema", "Leblon", "Botafogo", "Flamengo",
     "Tijuca", "Barra da Tijuca", "Jacarepaguá", "Bangu", "Campo Grande",
     "Gávea", "Recreio", "Méier", "Madureira", "Santa Cruz", "Sepetiba",
-    "Belford Roxo",
+    "Belford Roxo", "Centro",
 ]
 
 # Palavras-chave de habilidades/áreas usadas para tentar identificar o perfil
@@ -84,10 +89,17 @@ CARGOS_COMUNS = [
 
 # Sites que o script tentará consultar. Ative/desative conforme desejar.
 SITES_ATIVOS = {
-    "linkedin": True,
-    "indeed": True,
+    # LinkedIn e Indeed ficam desativados por padrão: ambos proíbem coleta
+    # automatizada sem autorização expressa. Os links manuais são exibidos no
+    # terminal. Só ative se tiver autorização escrita do portal.
+    "linkedin": False,
+    "indeed": False,
     "vagas_com": True,
     "infojobs": True,
+    "empregare": True,
+    "empregando_brasil": True,
+    "gupy": True,  # API JSON pública do portal; experimental e monitorada
+    "jooble": True,  # requer JOOBLE_API_KEY no .env
     "riovagas": True,
     "rioemprega": True,
     "rioempregos": True,
@@ -99,8 +111,99 @@ SITES_ATIVOS = {
 # sobrescrito na linha de comando com --nota-minima.
 NOTA_MINIMA_PADRAO = 25
 
-# UF (estado) alvo deste script — usado para descartar automaticamente vagas de
+# UF (estado) alvo deste script. Serve para descartar automaticamente vagas de
 # outros estados quando o site/scraper informa a cidade com UF (ex.: "São Paulo
-# / SP" é descartado se UF_ALVO = "RJ"). Vagas sem UF identificável não são
-# descartadas por esse filtro (não dá pra confirmar que são de outro estado).
+# / SP" é descartado se UF_ALVO = "RJ"). Vagas sem UF identificável e vagas remotas
+# não são descartadas por esse filtro (não dá para confirmar que são de outro estado).
 UF_ALVO = "RJ"
+
+
+# ---------------------------------------------------------------------------
+# IA (Gemini / Claude)
+# ---------------------------------------------------------------------------
+
+# Modelo padrão que oferece o melhor equilíbrio entre capacidade e acesso no
+# nível gratuito. Para usar o modelo de raciocínio topo de linha (pago), defina
+# GEMINI_MODEL=gemini-4-argon,gemini-3.8-flash no .env. O código tenta o modelo
+# mais forte e cai para Flash se o projeto não tiver acesso. Não ativa cobrança
+# paga sem a escolha explícita do usuário.
+GEMINI_MODELOS = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+]
+
+# Modelo do Claude (usado só quando não há GEMINI_API_KEY). Pode ser trocado
+# com CLAUDE_MODEL no .env.
+CLAUDE_MODELO = "claude-sonnet-5-5"
+
+# Nível de raciocínio: high melhora a leitura do currículo e a avaliação de
+# requisitos conflitantes. Aumenta consumo/latência; modelos que não aceitarem
+# este parâmetro são tentados novamente sem ele.
+GEMINI_NIVEL_PENSAMENTO = "high"
+
+# No Gemini, os tokens de raciocínio contam DENTRO do limite de saída. Esta folga
+# é somada ao limite pedido em cada chamada para a resposta não ser cortada no
+# meio (era a causa de erros "Unterminated string" e de mensagens vazias).
+GEMINI_FOLGA_TOKENS = 4096
+
+# Quantas vezes repetir uma chamada que falhou por motivo passageiro (limite de
+# requisições, instabilidade do servidor, rede) antes de tentar outro modelo.
+IA_TENTATIVAS_POR_MODELO = 3
+
+# Maior espera (segundos) aceita ao receber "tente novamente em X segundos".
+# Se o servidor pedir mais que isso, o script passa para o próximo modelo.
+IA_ESPERA_MAXIMA_SEGUNDOS = 45
+
+# O programa lembra qual modelo funcionou para a sua chave e começa direto por ele,
+# em vez de testar o primeiro da lista, falhar e trocar a cada chamada. A lembrança
+# fica neste arquivo (na pasta do projeto) e vale este número de dias; depois disso o
+# programa volta a testar os modelos melhores da lista, para aproveitar se algum
+# deles passar a funcionar na sua chave. Use 0 para nunca lembrar.
+IA_LEMBRAR_MODELO_DIAS = 7
+MODELO_PREFERIDO_ARQUIVO = ".achavagai_modelo.json"
+
+# Quantas vagas (as melhores da pré-análise por texto) vão para a IA avaliar, e
+# quantas vagas por chamada. Lotes menores = respostas mais confiáveis e, se um
+# lote falhar, os outros continuam valendo.
+IA_TOP_ANALISE = 30
+IA_TAMANHO_LOTE = 10
+
+# Pausa (segundos) entre uma chamada de IA e a seguinte, para respeitar o limite
+# de requisições por minuto do plano gratuito.
+PAUSA_ENTRE_CHAMADAS_IA = 1.0
+
+# Tamanho máximo (caracteres) da descrição de cada vaga enviada para a IA.
+DESCRICAO_MAX_CARACTERES_IA = 900
+
+# Remove CPF, RG, telefone, e-mail, CEP, data de nascimento e número da casa do
+# texto do currículo ANTES de enviar para a IA (o nome, a cidade e o bairro
+# continuam, porque ajudam na análise). Desative só se tiver um bom motivo.
+ANONIMIZAR_CURRICULO = True
+
+# Na "análise profunda", só busca a descrição completa de vagas cuja descrição
+# atual tenha menos caracteres que isto (as demais já estão boas).
+DESCRICAO_MINIMA_CARACTERES = 400
+
+# Sites cujas páginas de vaga NÃO são baixadas na análise profunda. O LinkedIn
+# proíbe coleta automatizada e bloqueia com facilidade, então fica de fora. Ele
+# continua sendo pesquisado na busca normal. Tire da lista por sua conta e risco.
+HOSTS_SEM_ANALISE_PROFUNDA = ("linkedin.com",)
+
+# Busca os sites ao mesmo tempo (um site por vez dentro de cada um, respeitando a
+# pausa REQUEST_DELAY_SECONDS). Se algum scraper se comportar mal assim, ponha False.
+BUSCA_PARALELA = True
+
+# Descarta vagas cuja data de comparecimento, entrevista, inscrição ou prazo, escrita
+# no título ou no começo da descrição (ex.: "Comparecer no dia 24/08"), já passou.
+# Vários portais regionais deixam esse tipo de vaga no ar por meses.
+FILTRAR_VAGAS_ENCERRADAS = True
+
+# Descarta, antes da IA, vagas que exigem uma categoria de CNH que o seu currículo não
+# informa (ex.: motorista de ônibus exige D, motorista de caminhão exige C). Só age se o
+# currículo cita a sua categoria; sem isso, a IA e você decidem.
+FILTRAR_POR_HABILITACAO = True
+
+# Histórico local (vagas já vistas + notas da IA em cache). Fica na pasta do
+# projeto. Notas em cache valem por este número de dias.
+HISTORICO_ARQUIVO = ".achavagai_historico.json"
+CACHE_VALIDADE_DIAS = 14
