@@ -62,11 +62,12 @@ Fontes configuradas no projeto:
 - Empregando Brasil, por feed XML público.
 - Gupy, por endpoint JSON utilizado pelo portal público de busca. **Integração experimental**: esse endpoint público não é a API corporativa oficialmente documentada e pode mudar sem aviso.
 - Jooble, por API. Precisa de uma chave própria em `JOOBLE_API_KEY` no `.env`.
-- Portais regionais: RioVagas, Rio Emprega, Rio Empregos e VagasRio.
+  A coleta usa paginação (30 por página, até 3 páginas por termo por padrão). O plano gratuito documenta 100 chamadas por dia por chave; ajuste `JOOBLE_MAX_PAGINAS_POR_TERMO` em `config.py` com cuidado.
+- Portais regionais: RioVagas, Rio Emprega, Rio Empregos e VagasRio. No VagasRio, se a busca nativa do WordPress vier vazia, o programa tenta uma vez o endpoint público padrão `/wp-json/wp/v2/posts`; se estiver desativado ou bloqueado, registra o status e continua com as demais fontes.
 
-Indeed e LinkedIn ficam **desativados por padrão**. O terminal mostra links para realizar a busca manualmente. Só habilite coleta automatizada se tiver autorização expressa aplicável; não há tentativa de contornar CAPTCHA, login ou controles anti-bot.
+Indeed e LinkedIn ficam **desativados por padrão**. O terminal mostra um link separado para cada cargo pesquisado, evitando uma busca ampla que misture termos. Essas consultas manuais não entram automaticamente no ranking ou na planilha. Só habilite coleta automatizada se tiver autorização expressa aplicável; não há tentativa de contornar CAPTCHA, login ou controles anti-bot.
 
-Ative ou desative cada fonte em `SITES_ATIVOS`, no `config.py`. A busca é feita por cada termo informado e os resultados do mesmo portal são deduplicados antes da contagem.
+Ative ou desative cada fonte em `SITES_ATIVOS`, no `config.py`. A busca é feita por cada termo informado e os resultados do mesmo portal são deduplicados antes da contagem. A deduplicação também compara título, empregador e cidade; sufixos jurídicos comuns (Ltda., ME, EPP, S/A) são normalizados. Vagas sem empresa ou sem cidade não são fundidas apenas por terem títulos parecidos.
 
 ## 4. Verificador de fontes e adaptação de estrutura
 
@@ -79,7 +80,7 @@ Para páginas HTML, o scraper tenta mais de uma estratégia em vez de depender a
 3. microdata Schema.org;
 4. extração alternativa por cartões/links semânticos.
 
-Os resultados das estratégias são mesclados e deduplicados. Se os seletores conhecidos falharem, o diagnóstico pode guardar em `diagnosticos/html/` um esqueleto da página contendo tags e atributos estruturais permitidos — sem texto de anúncio, links, cookies ou dados pessoais. Para APIs JSON, o diagnóstico guarda apenas nomes de campos e tipos, nunca valores dos anúncios.
+Os resultados das estratégias são mesclados e deduplicados. Se os seletores conhecidos falharem, o diagnóstico pode guardar em `diagnosticos/html/` um esqueleto da página contendo tags e atributos estruturais permitidos — sem texto de anúncio, links, cookies ou dados pessoais. Para APIs JSON, o diagnóstico guarda apenas nomes de campos e tipos, nunca valores dos anúncios. Respostas de XML são lidas com parser XML, sem avisos falsos do BeautifulSoup.
 
 **Limite importante:** o programa consegue se recuperar automaticamente quando a página ainda expõe padrões estruturados reconhecíveis. Quando um portal inventa uma estrutura totalmente nova, o verificador detecta e registra a mudança para correção; ele não reescreve sozinho o código Python nem garante que todo redesign será entendido. CAPTCHA, autenticação e bloqueios não são contornados.
 
@@ -134,7 +135,7 @@ Execute localmente:
 python -m pytest -q
 ```
 
-A suíte atual contém **479 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
+A suíte atual contém **510 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
 
 ## 9. Estrutura
 

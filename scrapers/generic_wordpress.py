@@ -18,12 +18,13 @@ SITES_WORDPRESS abaixo, com a URL base do site.
 """
 
 import re
+from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup
 
 from .base import Vaga, nova_sessao, buscar_url
 from .adaptive import extrair_vagas_adaptativo
-from .diagnostico import registrar_parser
+from .diagnostico import registrar_parser, registrar_schema_inesperado
 from intencao_busca import compilar_intencoes, vaga_corresponde
 
 # nome de exibição -> URL base do site
@@ -31,7 +32,7 @@ SITES_WORDPRESS = {
     "RioVagas": "https://riovagas.com.br",
     "Rio Emprega": "https://rioemprega.com.br",
     "Rio Empregos": "https://rioempregos.com.br",
-    "VagasRio": "https://vagasrio.com.br",
+    "VagasRio": "https://www.vagasrio.com.br",
 }
 
 # Alguns desses portais mostram a data por extenso ("7 de February de 2025" — sim,
@@ -125,46 +126,144 @@ def _relevante(vaga: Vaga, palavra_chave: str) -> bool:
     return vaga_corresponde(vaga, compilar_intencoes([palavra_chave]))
 
 
+def _texto_renderizado_wp(valor) -> str:
+    if isinstance(valor, dict):
+        valor = valor.get("rendered", "")
+    if not valor:
+        return ""
+    return BeautifulSoup(str(valor), "html.parser").get_text(" ", strip=True)
+
+
+def _buscar_rest_vagasrio(sessao, url_base: str, palavra_chave: str) -> list[Vaga]:
+    """Fallback público do WordPress REST API, sem autenticação ou evasão.
+
+    Só é usado no VagasRio quando a busca HTML não fornece vagas relevantes.
+    O endpoint padrão /wp-json/wp/v2/posts pode estar desativado; nesse caso o
+    diagnóstico registra a resposta e a aplicação continua com as outras fontes.
+    """
+    endpoint = urljoin(url_base.rstrip("/") + "/", "wp-json/wp/v2/posts")
+    parametros = {
+        "search": palavra_chave,
+        "per_page": 30,
+        "page": 1,
+        "_fields": "date,link,title,excerpt",
+    }
+    resposta = buscar_url(sessao, endpoint, diagnostico_nome="VagasRio", params=parametros)
+    if resposta is None:
+        return []
+    try:
+        dados = resposta.json()
+    except (ValueError,):
+        registrar_parser(endpoint, 0, "resposta não JSON do WordPress REST API",
+                         resposta.text, "VagasRio",
+                         content_type=resposta.headers.get("Content-Type", ""),
+                         url_final=getattr(resposta, "url", "") or endpoint)
+        return []
+
+    if not isinstance(dados, list):
+        registrar_schema_inesperado(
+            "VagasRio", endpoint, dados,
+            "WordPress REST API respondeu JSON, mas não retornou uma lista de posts",
+        )
+        return []
+
+    vagas: list[Vaga] = []
+    for post in dados:
+        if not isinstance(post, dict):
+            continue
+        titulo = _texto_renderizado_wp(post.get("title"))
+        link = str(post.get("link") or "").strip()
+        descricao = _texto_renderizado_wp(post.get("excerpt"))
+        if not titulo or not link:
+            continue
+        vaga = Vaga(
+            titulo=titulo,
+            empresa="",
+            cidade="",
+            data_publicacao=str(post.get("date") or ""),
+            link=link,
+            descricao=descricao[:2500],
+            fonte="VagasRio",
+        )
+        if _relevante(vaga, palavra_chave):
+            vagas.append(vaga)
+
+    registrar_parser(
+        endpoint, len(vagas), "WordPress REST API pública (posts)", "", "VagasRio",
+        content_type=resposta.headers.get("Content-Type", ""),
+        url_final=getattr(resposta, "url", "") or endpoint,
+    )
+    return vagas
+
+
 def buscar_vagas_wordpress(nome_site: str, url_base: str, palavra_chave: str) -> list[Vaga]:
     sessao = nova_sessao()
     vagas: list[Vaga] = []
 
-    url_busca = f"{url_base}/?s={palavra_chave.replace(' ', '+')}"
+    url_busca = f"{url_base.rstrip('/')}/?{urlencode({'s': palavra_chave})}"
     resposta = buscar_url(sessao, url_busca, diagnostico_nome=nome_site)
     if resposta is None:
         return vagas
 
     soup = BeautifulSoup(resposta.text, "html.parser")
     posts = _extrair_posts(soup)
-
     for post in posts:
         link_tag = post.find("a", href=True)
         titulo_tag = post.find(["h1", "h2", "h3"])
         data_tag = post.find("time")
         resumo_tag = post.find("p")
-
         if not link_tag:
             continue
-
         vagas.append(
             Vaga(
-                titulo=titulo_tag.get_text(strip=True) if titulo_tag else link_tag.get_text(strip=True),
-                empresa="",  # geralmente não estruturado nesses sites
-                cidade="",   # idem — normalmente vem só no texto da vaga
+                titulo=titulo_tag.get_text(" ", strip=True) if titulo_tag else link_tag.get_text(" ", strip=True),
+                empresa="",
+                cidade="",
                 data_publicacao=_extrair_data(post, data_tag),
-                link=link_tag["href"],
-                descricao=resumo_tag.get_text(strip=True) if resumo_tag else "",
+                link=urljoin(url_base.rstrip("/") + "/", link_tag["href"]),
+                descricao=resumo_tag.get_text(" ", strip=True) if resumo_tag else "",
                 fonte=nome_site,
             )
         )
 
-    vagas = [v for v in vagas if _relevante(v, palavra_chave)]
-    estrategia = "cartões WordPress (article/post/entry)" if vagas else "nenhum post WordPress reconhecido"
-    if not vagas:
-        alternativas, estrategia = extrair_vagas_adaptativo(resposta.text, nome_site, url_base, 60)
-        vagas.extend(v for v in alternativas if _relevante(v, palavra_chave))
-    registrar_parser(url_busca, len(vagas), estrategia, resposta.text, nome_site)
-    return vagas
+    vagas_relevantes = [v for v in vagas if _relevante(v, palavra_chave)]
+    if vagas_relevantes:
+        registrar_parser(url_busca, len(vagas_relevantes), "cartões WordPress (article/post/entry)",
+                         resposta.text, nome_site,
+                         content_type=resposta.headers.get("Content-Type", ""),
+                         url_final=getattr(resposta, "url", "") or url_busca)
+        return vagas_relevantes
+
+    # Mesmo quando o HTML contém uma listagem, se nenhum post corresponde ao
+    # termo, isso é um resultado vazio da busca local, não uma mudança de layout.
+    if posts:
+        estrategia = "cartões WordPress reconhecidos; nenhum correspondente ao termo"
+    else:
+        estrategia = "busca WordPress sem cartões reconhecidos"
+    registrar_parser(url_busca, 0, estrategia, resposta.text, nome_site,
+                     content_type=resposta.headers.get("Content-Type", ""),
+                     url_final=getattr(resposta, "url", "") or url_busca)
+
+    # O parser semântico ainda pode reconhecer cartões mesmo quando as classes
+    # do tema WordPress mudaram. Tentamos antes de consultar uma rota alternativa.
+    alternativas, estrategia_adaptativa = extrair_vagas_adaptativo(
+        resposta.text, nome_site, getattr(resposta, "url", "") or url_base, 60
+    )
+    alternativas = [v for v in alternativas if _relevante(v, palavra_chave)]
+    if alternativas:
+        registrar_parser(url_busca, len(alternativas), estrategia_adaptativa,
+                         resposta.text, nome_site,
+                         content_type=resposta.headers.get("Content-Type", ""),
+                         url_final=getattr(resposta, "url", "") or url_busca)
+        return alternativas
+
+    # No VagasRio a busca nativa foi observada retornando search-no-results.
+    # Fazemos uma única consulta complementar ao endpoint público padrão do WP.
+    if nome_site == "VagasRio":
+        import config
+        if getattr(config, "VAGASRIO_USAR_REST_FALLBACK", True):
+            return _buscar_rest_vagasrio(sessao, url_base, palavra_chave)
+    return []
 
 
 def buscar_vagas_todos_wordpress(palavra_chave: str, sites_ativos: dict[str, bool]) -> list[Vaga]:

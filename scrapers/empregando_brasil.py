@@ -21,10 +21,19 @@ _CACHE: tuple[float, list[dict]] | None = None
 
 
 def _texto(node) -> str:
+    """Converte texto/XML/HTML sem mandar URLs simples ao parser HTML.
+
+    Campos do feed podem conter texto puro, URLs ou HTML em CDATA. Só usamos
+    BeautifulSoup quando há sinais reais de marcação HTML, evitando
+    MarkupResemblesLocatorWarning para strings como https://... .
+    """
     if node is None:
         return ""
     bruto = "".join(node.itertext()) if hasattr(node, "itertext") else str(node)
-    return re.sub(r"\s+", " ", BeautifulSoup(unescape(bruto), "html.parser").get_text(" ", strip=True)).strip()
+    bruto = unescape(bruto)
+    if re.search(r"</?[A-Za-z][^>]*>", bruto):
+        bruto = BeautifulSoup(bruto, "html.parser").get_text(" ", strip=True)
+    return re.sub(r"\s+", " ", bruto).strip()
 
 
 def _local_name(tag: str) -> str:
@@ -58,7 +67,9 @@ def _carregar_feed() -> list[dict]:
                     itens.append(campo)
         with _LOCK:
             _CACHE = (time.monotonic(), itens)
-        registrar_parser(FEED_URL, len(itens), "feed XML parceiro", resposta.text, "Empregando Brasil")
+        registrar_parser(FEED_URL, len(itens), "feed XML parceiro", resposta.text, "Empregando Brasil",
+                         content_type=resposta.headers.get("Content-Type", ""),
+                         url_final=getattr(resposta, "url", "") or FEED_URL)
         return itens
     except (requests.RequestException, ET.ParseError) as erro:
         registrar_http(FEED_URL, getattr(getattr(erro, "response", None), "status_code", None),

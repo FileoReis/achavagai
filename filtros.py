@@ -435,15 +435,39 @@ def _cidade_base(cidade: str) -> str:
     return normalizar_texto(re.split(r"[,/\-–(]", cidade or "")[0])
 
 
+def _empresa_base_duplicata(valor: str) -> str:
+    """Normaliza sufixos jurídicos comuns para comparar o mesmo empregador.
+
+    Ex.: "Empresa Alfa Ltda." e "Empresa Alfa S/A". A remoção só ocorre no
+    final do nome e a chave continua exigindo título e cidade iguais, para não
+    juntar empresas apenas parecidas.
+    """
+    tokens = normalizar_texto(valor).split()
+    sufixos = (("sociedade", "anonima"), ("s", "a"), ("s", "c"),
+               ("ltda",), ("limitada",), ("eireli",), ("epp",), ("me",), ("sa",))
+    alterou = True
+    while tokens and alterou:
+        alterou = False
+        for sufixo in sufixos:
+            if len(tokens) > len(sufixo) and tuple(tokens[-len(sufixo):]) == sufixo:
+                tokens = tokens[:-len(sufixo)]
+                alterou = True
+                break
+    return " ".join(tokens) or normalizar_texto(valor)
+
+
 def chave_duplicata(vaga) -> tuple[str, str, str] | None:
     """Chave (título, empresa, cidade) para achar a MESMA vaga publicada em sites
-    diferentes, com links diferentes. Só existe quando a empresa é conhecida
-    (sem empresa, juntar vagas só pelo título geraria falsos positivos)."""
-    empresa = normalizar_texto(getattr(vaga, "empresa", "") or "")
+    diferentes, com links diferentes. Reconhece variações de sufixos jurídicos
+    do mesmo empregador. Sem empresa, só deduplica quando o link é igual, para
+    evitar fundir vagas diferentes que tenham o mesmo título.
+    """
+    empresa = _empresa_base_duplicata(getattr(vaga, "empresa", "") or "")
     titulo = normalizar_texto(getattr(vaga, "titulo", "") or "")
-    if not empresa or not titulo:
+    cidade = _cidade_base(getattr(vaga, "cidade", "") or "")
+    if not empresa or not titulo or not cidade:
         return None
-    return (titulo, empresa, _cidade_base(getattr(vaga, "cidade", "") or ""))
+    return (titulo, empresa, cidade)
 
 
 def _mesclar(principal, outra) -> None:

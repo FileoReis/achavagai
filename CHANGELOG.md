@@ -1,3 +1,12 @@
+## 24/11/2026 — Melhorias de coleta e diagnóstico
+
+- Jooble: paginação habilitada, até 3 páginas de 30 vagas por termo por padrão; interrompe ao atingir `totalCount`, uma página curta ou ausência de novos anúncios. Deduplica IDs entre páginas e não inclui a chave real nas mensagens de erro.
+- Jooble: configuração documentada em `JOOBLE_MAX_PAGINAS_POR_TERMO` e `JOOBLE_RESULTADOS_POR_PAGINA`, respeitando o limite diário documentado pelo plano gratuito.
+- Empregare: requisição passa a usar os cabeçalhos gerais do projeto e registra HTTP 403 como acesso negado, sem chamar incorretamente de timeout e sem tentar contornar o bloqueio.
+- Empregando Brasil: strings que sejam apenas URLs/texto puro não são mais enviadas ao BeautifulSoup; HTML em CDATA continua sendo convertido em texto.
+- Diagnóstico: separa HTTP 401, 403, 407, 429 e 451 de erros de rede.
+- Indeed e LinkedIn: terminal exibe uma pesquisa manual separada para cada termo, em vez de combinar todos os cargos em uma única busca ampla.
+
 # Mudanças desta atualização (novembro de 2026)
 
 ## Bugs corrigidos (encontrados lendo o código e testando)
@@ -82,3 +91,14 @@
 - **Intenção profissional:** filtro de intenção antes do ranking, separação entre áreas/cargos comprovados e habilidades transferíveis, e tratamento específico de CPD sem confundir com PCD.
 - **Fontes e conformidade:** Indeed e LinkedIn ficam desligados por padrão e aparecem como buscas manuais; Jooble requer chave própria. Empregare e Empregando Brasil permanecem integrados.
 - **Testes:** 479 testes automatizados passaram; nenhum site real ou chave de IA foi acessado pela suíte.
+
+
+## 25/11/2026 — Diagnóstico Empregare e fallback VagasRio
+
+- Empregare: respostas JSON agora são validadas por schema antes da extração. A estrutura documentada `model.dados` continua sendo o caminho principal; wrappers comuns (`data`, `items`, `results`, `vagas`, `jobs`) só são aceitos quando os itens possuem campos de título reconhecidos.
+- Empregare: quando o schema muda, o diagnóstico grava `diagnosticos/json/` com nomes de campos e tipos, sem valores dos anúncios, e deixa de produzir snapshots HTML vazios. Quando o servidor responde HTML, preserva apenas o esqueleto DOM para manutenção do parser.
+- VagasRio: reconhece marcadores WordPress `search-no-results`/`.no-results` como busca sem resultados, não como mudança de layout. A URL de busca passa a ser codificada com `urlencode` e usa o domínio canônico `www.vagasrio.com.br`.
+- VagasRio: quando a busca HTML não retorna anúncios relevantes, tenta uma consulta à API REST pública padrão do WordPress (`/wp-json/wp/v2/posts`) uma vez. Se a API estiver desativada/bloqueada, o erro é registrado sem tentar contornar controles.
+- Diagnóstico: registra URL solicitada e URL final após redirecionamento, removendo query e fragmentos; evita contar duas vezes o mesmo HTTPError no coletor compartilhado.
+- XML: a telemetria usa `ElementTree` para detectar bloqueios/resultados em feeds XML e não passa XML ao parser HTML do BeautifulSoup; o coletor Empregando Brasil informa Content-Type ao diagnóstico.
+- Testes: 510 testes automatizados passaram, incluindo schema JSON da Empregare, snapshots sanitizados, páginas WordPress sem resultados, fallback REST do VagasRio e aviso XML.

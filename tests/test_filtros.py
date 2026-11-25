@@ -118,6 +118,15 @@ def test_normalizar_link_de_linkedin_ignora_trackingid():
     assert filtros.normalizar_link(a) == filtros.normalizar_link(b)
 
 
+def test_remover_duplicadas_reconhece_sufixos_juridicos_da_empresa(vaga):
+    vagas = [
+        vaga(titulo="Auxiliar de CPD", empresa="Mercado Alfa Ltda.", cidade="Rio de Janeiro, RJ", link="https://portal-a.test/vaga/1"),
+        vaga(titulo="Auxiliar de CPD", empresa="Mercado Alfa S/A", cidade="Rio de Janeiro - RJ", link="https://portal-b.test/vaga/99"),
+    ]
+    unicas = filtros.remover_duplicadas(vagas)
+    assert len(unicas) == 1
+
+
 def test_remover_duplicadas_por_link_e_por_titulo_empresa_cidade(vaga):
     vagas = [
         vaga(titulo="Vendedor", empresa="Loja X", cidade="Rio de Janeiro, RJ", link="https://a.com/1?utm_source=z"),
@@ -151,3 +160,11 @@ def test_enriquecer_nao_sobrescreve_o_que_ja_existe(vaga):
 
 def test_dividir_palavras_chave():
     assert filtros.dividir_palavras_chave(" vendedor , , técnico em informática ") == ["vendedor", "técnico em informática"]
+
+
+def test_remover_duplicadas_nao_funde_mesmo_titulo_empresa_sem_cidade(vaga):
+    vagas = [
+        vaga(titulo="Auxiliar Administrativo", empresa="Empresa Alfa", cidade="", link="https://a.test/1"),
+        vaga(titulo="Auxiliar Administrativo", empresa="Empresa Alfa", cidade="", link="https://b.test/2"),
+    ]
+    assert len(filtros.remover_duplicadas(vagas)) == 2

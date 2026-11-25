@@ -42,7 +42,7 @@ def buscar_url(
     Não tenta resolver CAPTCHA, fazer login automatizado nem contornar bloqueios.
     ``diagnostico_nome`` identifica o portal no verificador de saúde.
     """
-    inicio = time.monotonic()
+    resposta = None
     try:
         resposta = sessao.get(url, timeout=20, **kwargs)
         texto = getattr(resposta, "text", "") or ""
@@ -52,6 +52,7 @@ def buscar_url(
             texto=texto[:30000],
             content_type=(resposta.headers or {}).get("Content-Type", ""),
             fonte=diagnostico_nome,
+            url_final=getattr(resposta, "url", "") or url,
         )
         resposta.raise_for_status()
         if resposta.status_code in (401, 403, 407, 429, 451):
@@ -61,9 +62,13 @@ def buscar_url(
     except requests.RequestException as erro:
         status = getattr(getattr(erro, "response", None), "status_code", None)
         texto = getattr(getattr(erro, "response", None), "text", "") or ""
-        registrar_http(
-            url=url, status_code=status, texto=texto[:30000],
-            erro=f"{erro.__class__.__name__}: {str(erro)[:180]}",
-            fonte=diagnostico_nome,
-        )
+        # Se houve resposta HTTP, ela já foi registrada acima. Evita duplicar
+        # tentativas/erros para 401/403/429 ao executar raise_for_status().
+        if resposta is None:
+            registrar_http(
+                url=url, status_code=status, texto=texto[:30000],
+                erro=f"{erro.__class__.__name__}: {str(erro)[:180]}",
+                fonte=diagnostico_nome,
+                url_final=getattr(getattr(erro, "response", None), "url", "") or url,
+            )
         return None

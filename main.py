@@ -327,6 +327,10 @@ def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
         console.print(f"  [green]✓[/green] {nome}: [bold]{quantidade}[/bold] vaga(s){detalhe}{tempo}")
         if resultado["erros"]:
             console.print(f"    [yellow]Algumas buscas falharam:[/yellow] [dim]{escape(resultado['erros'][0][:160])}[/dim]")
+        elif obter_diagnostico:
+            estado_fonte = obter_diagnostico(resultado["nome"])
+            if estado_fonte.get("status") == "parcial":
+                console.print(f"    [yellow]Consulta parcial:[/yellow] [dim]{escape(estado_fonte.get('detalhe', 'uma ou mais páginas/termos falharam')[:240])}[/dim]")
     else:
         estado = {}
         if obter_diagnostico:
@@ -347,7 +351,19 @@ def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
             if estado.get("snapshot"):
                 detalhe_estado += f" | DOM estrutural: {estado['snapshot']}"
         elif status == "bloqueio":
-            explicacao = "acesso bloqueado ou CAPTCHA; nenhuma tentativa de contornar a proteção"
+            explicacao = "proteção/CAPTCHA detectado; nenhuma tentativa de contornar a proteção"
+        elif status == "acesso_negado":
+            explicacao = "servidor recusou a requisição (HTTP 403); não é falha de conexão"
+        elif status == "autenticacao_falhou":
+            explicacao = "autenticação recusada (HTTP 401); verifique a credencial da fonte"
+        elif status == "limite_requisicoes":
+            explicacao = "limite de requisições atingido (HTTP 429); tente após a janela de renovação"
+        elif status == "proxy_requer_autenticacao":
+            explicacao = "proxy exige autenticação (HTTP 407)"
+        elif status == "restricao_legal":
+            explicacao = "acesso indisponível por restrição legal (HTTP 451)"
+        elif status == "parcial":
+            explicacao = "algumas consultas falharam e outras responderam; veja o diagnóstico abaixo"
         elif status == "erro_http":
             explicacao = "erro HTTP devolvido pelo portal"
         elif status == "erro_rede":
@@ -361,6 +377,25 @@ def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
         console.print(f"  [yellow]-[/yellow] {nome}: 0 vaga(s){tempo} [dim]({explicacao})[/dim]")
         if detalhe_estado:
             console.print(f"    [dim]{escape(detalhe_estado[:260])}[/dim]")
+
+
+def _montar_urls_busca_manual(fonte: str, termos: list[str], cidade: str) -> list[tuple[str, str]]:
+    """Retorna (termo, URL) para uma busca manual específica por cargo."""
+    from urllib.parse import urlencode
+
+    urls = []
+    for termo in termos:
+        termo = str(termo or "").strip()
+        if not termo:
+            continue
+        if fonte.lower() == "indeed":
+            url = "https://br.indeed.com/jobs?" + urlencode({"q": termo, "l": cidade})
+        elif fonte.lower() == "linkedin":
+            url = "https://www.linkedin.com/jobs/search/?" + urlencode({"keywords": termo, "location": cidade})
+        else:
+            raise ValueError(f"Fonte manual não suportada: {fonte}")
+        urls.append((termo, url))
+    return urls
 
 
 def buscar_todas_vagas(filtros: dict) -> list:
@@ -399,17 +434,15 @@ def buscar_todas_vagas(filtros: dict) -> list:
 
     # Indeed e LinkedIn proíbem scraping automatizado sem autorização expressa.
     # Em vez de insistir em bloqueios, o AchaVagAI oferece atalhos de busca manual.
-    from urllib.parse import urlencode
     cidade_url = filtros.get("cidade", "Rio de Janeiro")
-    termos_url = filtros.get("palavra_chave", "")
     if not SITES_ATIVOS.get("indeed", False) or not SITES_ATIVOS.get("linkedin", False):
-        console.print("\n[dim]Portais com automação desativada por padrão (consulte os resultados manualmente):[/dim]")
+        console.print("\n[dim]Pesquisas manuais (não entram automaticamente no ranking/Excel):[/dim]")
         if not SITES_ATIVOS.get("indeed", False):
-            url = "https://br.indeed.com/jobs?" + urlencode({"q": termos_url, "l": cidade_url})
-            console.print(f"  Indeed: [link={url}]{url}[/link]")
+            for termo, url in _montar_urls_busca_manual("indeed", termos, cidade_url):
+                console.print(f"  Indeed — {escape(termo)}: [link={url}]abrir pesquisa[/link]")
         if not SITES_ATIVOS.get("linkedin", False):
-            url = "https://www.linkedin.com/jobs/search/?" + urlencode({"keywords": termos_url, "location": cidade_url})
-            console.print(f"  LinkedIn: [link={url}]{url}[/link]")
+            for termo, url in _montar_urls_busca_manual("linkedin", termos, cidade_url):
+                console.print(f"  LinkedIn — {escape(termo)}: [link={url}]abrir pesquisa[/link]")
     return todas
 
 

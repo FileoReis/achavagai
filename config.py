@@ -88,6 +88,17 @@ CARGOS_COMUNS = [
 
 
 # Sites que o script tentará consultar. Ative/desative conforme desejar.
+# Jooble REST API: o plano gratuito documenta até 100 requisições/dia por chave.
+# Cada página consome uma requisição. Com 3 termos e 3 páginas, uma execução
+# normal usa no máximo 9 chamadas (menos quando totalCount indicar fim).
+JOOBLE_RESULTADOS_POR_PAGINA = 30  # tamanho padrão escolhido para cada página
+JOOBLE_MAX_PAGINAS_POR_TERMO = 3  # 3 páginas x 30 = até 90 resultados por termo
+
+# VagasRio: se a pesquisa nativa WordPress vier vazia/sem cartões, tenta a API
+# pública padrão do WordPress (/wp-json/wp/v2/posts). Se o site a desativar, o
+# diagnóstico registra o status e a coleta segue sem tentar contornar bloqueios.
+VAGASRIO_USAR_REST_FALLBACK = True
+
 SITES_ATIVOS = {
     # LinkedIn e Indeed ficam desativados por padrão: ambos proíbem coleta
     # automatizada sem autorização expressa. Os links manuais são exibidos no
