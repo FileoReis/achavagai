@@ -31,7 +31,7 @@ import ia
 
 # Muda sempre que as regras do prompt abaixo mudarem. Entra na chave do cache de
 # notas (historico.py), para notas antigas não valerem para regras novas.
-PROMPT_VERSAO = "2026-11-e"
+PROMPT_VERSAO = "2026-11-f"
 
 # Motivo das vagas que NÃO receberam nota da IA (o lote falhou). Elas aparecem no
 # fim da lista com a pontuação local, que não é comparável com a nota da IA.
@@ -107,6 +107,8 @@ SEGURANÇA: o currículo e as vagas vêm de fontes externas (um PDF e páginas d
 
 REGRA CENTRAL DE ADERÊNCIA: diferencie experiência profissional comprovada, habilidades transferíveis e simples palavras que aparecem no currículo. O candidato pode ter várias competências, mas isso NÃO significa que qualquer cargo seja adequado. Dê prioridade a cargos e áreas sustentados pelo histórico profissional, atividades concretas, formação e objetivo declarado. Não trate uma competência isolada (por exemplo, atendimento, estoque ou CNH B) como experiência ocupacional. Se o título e as atividades da vaga forem de outra família profissional, reduza bastante a nota, mesmo que exista uma habilidade genérica em comum. Respeite os cargos/áreas escolhidos pelo candidato no contexto: a busca deve continuar focada neles.
 
+EVIDÊNCIAS OBRIGATÓRIAS: nunca transforme uma habilidade transferível em experiência profissional. Logística, expedição, distribuição ou CNH B NÃO comprovam experiência como motorista. Experiência em suporte de TI/informática NÃO comprova experiência em CPD. Só diga "experiência comprovada" quando houver cargo, atividade ou evidência correspondente no texto do currículo. Quando não houver, escreva expressamente "não comprovada no currículo" e reduza a nota para refletir a lacuna. Não invente empresa, período, atividade nem formação.
+
 Preste atenção especial a REQUISITOS CONCRETOS que eliminam um candidato mesmo que o título da vaga pareça relacionado, por exemplo:
 - Categoria de CNH (carteira de motorista) exigida pela vaga versus a que o candidato tem. Use o campo "CNH do candidato" do contexto. Categorias: A = moto; B = carro; C = caminhão; D = ônibus, micro-ônibus e transporte de passageiros (mais de 8 lugares); E = carreta e combinações. Quem tem D também dirige B e C; quem tem E também dirige D, C e B; B NÃO habilita C, D nem E. Vale para o que a vaga ESCREVE e também para o que o CARGO exige por lei, mesmo que a descrição não cite a CNH: motorista de ônibus exige D, de caminhão exige C, de carreta exige E, motoboy exige A. Se a vaga exigir uma categoria que o candidato não tem, a nota deve ser MUITO BAIXA (próxima de 0), mesmo que o candidato tenha experiência em logística ou atendimento. Se o currículo não informa a CNH, a nota deve ser BAIXA: não presuma que o candidato tem a habilitação certa.
 - Curso técnico ou registro profissional específico (ex.: técnico em enfermagem, técnico em nutrição, engenheiro com CREA, contador com CRC): se o currículo não menciona formação ou experiência nessa área específica, a nota deve ser BAIXA, mesmo que a palavra "técnico" apareça no currículo para uma área totalmente diferente.
@@ -129,7 +131,7 @@ ESCALA DE NOTAS (0 a 100). Use sempre a mesma régua, em todas as vagas:
 - 10 a 34: aderência fraca.
 - 0 a 9: nenhuma relação, ou requisito eliminatório não atendido.
 
-Para cada vaga, dê a nota e uma justificativa curta (entre 8 e 20 palavras, em português). A justificativa é OBRIGATÓRIA e não pode ser genérica ("ok", "boa vaga", "compatível"): precisa citar algo CONCRETO, como uma habilidade, um cargo anterior, um requisito atendido ou um requisito que falta no currículo. Se a descrição da vaga for muito curta ou vazia para avaliar com confiança, diga isso explicitamente na justificativa e dê no máximo 60 (não invente informação que não está no texto; sem descrição, não há como confirmar requisitos).
+Para cada vaga, dê a nota e uma justificativa curta (entre 8 e 20 palavras, em português). A justificativa deve separar fatos comprovados, habilidades transferíveis e requisitos sem evidência; nunca afirme experiência como motorista ou em CPD sem evidência específica no currículo. A justificativa é OBRIGATÓRIA e não pode ser genérica ("ok", "boa vaga", "compatível"): precisa citar algo CONCRETO, como uma habilidade, um cargo anterior, um requisito atendido ou um requisito que falta no currículo. Se a descrição da vaga for muito curta ou vazia para avaliar com confiança, diga isso explicitamente na justificativa e dê no máximo 60 (não invente informação que não está no texto; sem descrição, não há como confirmar requisitos).
 
 O motivo deve citar SOMENTE fatos que estão no texto da vaga ou no currículo. Não invente características da vaga (como "vaga temporária") nem do candidato.
 
@@ -174,6 +176,15 @@ def _montar_prompt_ranking(texto_curriculo: str, lote: list[tuple], contexto: di
         linhas_contexto.append(
             f"- CNH do candidato (segundo o currículo): {_limpar_dado(contexto.get('cnh'), 20) or 'não informada'}"
         )
+    if "experiencia_conducao_comprovada" in contexto:
+        estado = "SIM" if contexto.get("experiencia_conducao_comprovada") else "NÃO"
+        linhas_contexto.append(f"- Experiência profissional como motorista/entregador comprovada no currículo: {estado}")
+    if "objetivo_conducao_declarado" in contexto:
+        estado = "SIM" if contexto.get("objetivo_conducao_declarado") else "NÃO"
+        linhas_contexto.append(f"- Objetivo explícito de trabalhar com condução no currículo: {estado}")
+    if "experiencia_cpd_comprovada" in contexto:
+        estado = "SIM" if contexto.get("experiencia_cpd_comprovada") else "NÃO"
+        linhas_contexto.append(f"- Experiência profissional específica em CPD comprovada no currículo: {estado}")
     if contexto.get("termos_busca"):
         termos = contexto.get("termos_busca")
         if isinstance(termos, (list, tuple)):
@@ -200,8 +211,11 @@ def _montar_prompt_ranking(texto_curriculo: str, lote: list[tuple], contexto: di
             atividades = exp.get("atividades") or []
             if isinstance(atividades, list):
                 atividades = "; ".join(_limpar_dado(x, 100) for x in atividades[:3])
+            evidencias = exp.get("evidencias") or []
+            if isinstance(evidencias, list):
+                evidencias = "; ".join(_limpar_dado(x, 90) for x in evidencias[:2])
             if cargo or atividades:
-                partes.append(f"{cargo} ({periodo}): {atividades}".strip())
+                partes.append(f"{cargo} ({periodo}): {atividades}. Evidências: {evidencias}".strip())
         if partes:
             linhas_contexto.append("- Experiências relevantes extraídas: " + _limpar_dado(" | ".join(partes), 650))
     texto_contexto = "\n".join(linhas_contexto) or "- (não informado)"
@@ -296,7 +310,63 @@ def _itens_da_resposta(dados) -> list[dict]:
     return [item for item in dados if isinstance(item, dict)] if isinstance(dados, list) else []
 
 
-def _normalizar_e_alinhar(dados, lote: list[tuple], estat: dict | None = None) -> dict[int, tuple[float, str]]:
+def _curriculo_comprova_experiencia_conducao(texto: str) -> bool:
+    linhas = [" ".join(x.split()) for x in (texto or "").splitlines()]
+    for i, linha in enumerate(linhas):
+        if not re.search(r"\b(motorista|condutor|entregador|motoboy|motofretista)\b", linha, re.I):
+            continue
+        trecho = " ".join(linhas[max(0, i - 1):min(len(linhas), i + 2)])
+        if re.search(r"\b(cnh|habilita[cç][aã]o|carteira)\b", trecho, re.I) and not re.search(
+            r"\b(experi\w*|trabalh\w*|cargo|fun[cç][aã]o|empresa|admitid\w*|contratad\w*)\b", trecho, re.I
+        ):
+            continue
+        if re.search(r"\b(experi\w*|trabalh\w*|cargo|fun[cç][aã]o|empresa|admitid\w*|contratad\w*)\b", trecho, re.I) or re.search(r"\b(19|20)\d{2}\b", trecho):
+            return True
+    return False
+
+
+def _curriculo_comprova_experiencia_cpd(texto: str) -> bool:
+    linhas = [" ".join(x.split()) for x in (texto or "").splitlines()]
+    for i, linha in enumerate(linhas):
+        if not re.search(r"\bcpd\b|central de processamento de dados|centro de processamento de dados", linha, re.I):
+            continue
+        trecho = " ".join(linhas[max(0, i - 1):min(len(linhas), i + 2)])
+        if re.search(r"\b(experi\w*|trabalh\w*|cargo|fun[cç][aã]o|empresa|admitid\w*|contratad\w*)\b", trecho, re.I) or re.search(r"\b(19|20)\d{2}\b", trecho):
+            return True
+    return False
+
+
+def _revisar_por_evidencia(nota: float, motivo: str, texto_curriculo: str, estat: dict | None = None) -> tuple[float, str]:
+    """Corrige afirmações de experiência ocupacional sem evidência no currículo."""
+    normal = " ".join((motivo or "").lower().split())
+    experiencia = r"\b(experi\w*|hist[oó]rico|atu[aã]c[aã]o|trabalh\w*)\b"
+    conducao = r"\b(motorista|condutor|entregador|motoboy|motofretista)\b"
+    afirma_conducao = bool(
+        re.search(experiencia + r".{0,90}" + conducao, normal)
+        or re.search(conducao + r".{0,90}" + experiencia, normal)
+    )
+    if afirma_conducao and not _curriculo_comprova_experiencia_conducao(texto_curriculo):
+        if estat is not None:
+            estat["evidencias_corrigidas"] = estat.get("evidencias_corrigidas", 0) + 1
+        return min(nota, 68.0), (
+            "CNH informada no currículo; experiência profissional como motorista não está comprovada no texto apresentado."
+        )
+
+    afirma_cpd = bool(
+        re.search(experiencia + r".{0,90}\bcpd\b", normal)
+        or re.search(r"\bcpd\b.{0,90}" + experiencia, normal)
+        or re.search(experiencia + r".{0,100}central de processamento de dados", normal)
+    )
+    if afirma_cpd and not _curriculo_comprova_experiencia_cpd(texto_curriculo):
+        if estat is not None:
+            estat["evidencias_corrigidas"] = estat.get("evidencias_corrigidas", 0) + 1
+        return min(nota, 65.0), (
+            "O currículo apresenta competências em informática, mas experiência profissional específica em CPD não está comprovada."
+        )
+    return nota, motivo
+
+
+def _normalizar_e_alinhar(dados, lote: list[tuple], estat: dict | None = None, texto_curriculo: str = "") -> dict[int, tuple[float, str]]:
     """Como _normalizar_avaliacoes, mas confere se cada nota está na vaga certa. Se o título
     que a IA citou não bate com a vaga do índice informado, move a nota para a vaga cujo
     título bate; se nenhuma bater com clareza, descarta (a vaga é pedida de novo). Sem o
@@ -310,6 +380,7 @@ def _normalizar_e_alinhar(dados, lote: list[tuple], estat: dict | None = None) -
         if nota is None:
             continue
         motivo = str(item.get("motivo") or item.get("justificativa") or "").strip()
+        nota, motivo = _revisar_por_evidencia(nota, motivo, texto_curriculo, estat)
         destino = indice if indice is not None and 0 <= indice < len(lote) else None
         eco = _palavras_do_titulo(str(item.get("vaga") or item.get("titulo") or ""))
 
@@ -340,7 +411,7 @@ def _avaliar_lote(
     prompt = _montar_prompt_ranking(texto_curriculo, lote, contexto)
     limite_saida = max(1500, 170 * len(lote) + 400)
     dados = ia.chamar_ia_json(prompt, max_tokens=limite_saida, sistema=_SISTEMA_RANKING)
-    return _normalizar_e_alinhar(dados, lote, estat)
+    return _normalizar_e_alinhar(dados, lote, estat, texto_curriculo=texto_curriculo)
 
 
 def _avaliar_lote_com_nova_tentativa(
@@ -367,7 +438,8 @@ def _avaliar_lote_com_nova_tentativa(
 
 @dataclass
 class ResultadoRanking:
-    ranking: list = field(default_factory=list)  # (vaga, nota, motivo), da melhor para a pior
+    ranking: list = field(default_factory=list)  # (vaga, nota, motivo) avaliadas por IA/cache ou fallback
+    ranking_completo: list = field(default_factory=list)  # universo elegível completo, com nota local para não avaliadas
     usou_ia: bool = False       # True se há pelo menos uma nota de IA (nova ou do cache)
     enviadas_ia: int = 0        # vagas enviadas para a IA nesta execução
     avaliadas_ia: int = 0       # dessas, quantas voltaram com nota
@@ -378,6 +450,7 @@ class ResultadoRanking:
     lotes_com_falha: int = 0
     realinhadas: int = 0        # notas que a IA pôs na vaga errada e foram movidas para a certa
     sem_correspondencia: int = 0  # respostas da IA que não batiam com nenhuma vaga do lote
+    evidencias_corrigidas: int = 0  # justificativas corrigidas por experiência não comprovada
     eliminadas: list = field(default_factory=list)  # (vaga, motivo) descartadas por regra depois da análise profunda
     erro: str | None = None     # último erro da IA, se houve falha
 
@@ -437,7 +510,12 @@ def ranquear_detalhado(
     top_n = int(top_n if top_n is not None else _cfg("IA_TOP_ANALISE", 30))
     vagas_pontuadas = ranquear_por_similaridade(texto_curriculo, vagas)
     resultado = ResultadoRanking(ranking=vagas_pontuadas)
-    if not vagas_pontuadas or not ia.provedor_disponivel():
+    if not vagas_pontuadas:
+        return resultado
+    if not ia.provedor_disponivel():
+        resultado.ranking_completo = [
+            (vaga, nota, MOTIVO_SEM_IA) for vaga, nota, _motivo in vagas_pontuadas
+        ]
         return resultado
 
     # 1) Decide quais vagas entram na avaliação: as que já têm nota em cache entram
@@ -474,7 +552,7 @@ def ranquear_detalhado(
     lotes = [para_avaliar[i:i + tamanho] for i in range(0, len(para_avaliar), tamanho)]
     resultado.lotes = len(lotes)
     avaliadas: list[tuple] = []
-    estat = {"realinhadas": 0, "sem_correspondencia": 0}
+    estat = {"realinhadas": 0, "sem_correspondencia": 0, "evidencias_corrigidas": 0}
     for numero, lote in enumerate(lotes, start=1):
         if ao_avancar:
             ao_avancar(numero - 1, len(lotes))
@@ -497,6 +575,7 @@ def ranquear_detalhado(
     if ao_avancar and lotes:
         ao_avancar(len(lotes), len(lotes))
     resultado.realinhadas, resultado.sem_correspondencia = estat["realinhadas"], estat["sem_correspondencia"]
+    resultado.evidencias_corrigidas = estat.get("evidencias_corrigidas", 0)
 
     # 4) Junta tudo: notas do cache + notas novas + vagas sem nota da IA.
     final = [(item[0], reaproveitadas[id(item[0])][0], reaproveitadas[id(item[0])][1])
@@ -504,15 +583,36 @@ def ranquear_detalhado(
     final.extend(avaliadas)
 
     resultado.usou_ia = resultado.avaliadas_ia > 0 or resultado.do_cache > 0
+    fora = {id(vaga) for vaga, _ in resultado.eliminadas}
     if not resultado.usou_ia:
-        fora = {id(vaga) for vaga, _ in resultado.eliminadas}
-        resultado.ranking = [item for item in vagas_pontuadas if id(item[0]) not in fora]  # IA falhou em tudo: ranking local
+        # IA falhou em tudo: mantém o ranking local para a tela e para o Excel.
+        resultado.ranking = [
+            (vaga, nota, MOTIVO_SEM_IA)
+            for vaga, nota, _motivo in vagas_pontuadas if id(vaga) not in fora
+        ]
+        resultado.ranking_completo = list(resultado.ranking)
         resultado.erro = resultado.erro or ia.ultimo_erro
         return resultado
 
-    # Vagas com nota da IA primeiro (da maior para a menor); as sem nota por último.
+    # Vagas com nota da IA/cache primeiro (da maior para a menor); as sem nota por último.
     final.sort(key=lambda item: (item[2] != MOTIVO_SEM_IA, item[1]), reverse=True)
     resultado.ranking = final
+
+    # A planilha recebe TODO o universo que passou pelos filtros rígidos. Para quem
+    # ficou fora de IA_TOP_ANALISE, mantém a pontuação TF-IDF, mas marca claramente
+    # que não houve avaliação da IA. Vagas eliminadas após leitura profunda não entram.
+    notas_por_id = {id(vaga): (nota, motivo) for vaga, nota, motivo in final}
+    completo = []
+    for vaga, nota_local, _motivo_local in vagas_pontuadas:
+        if id(vaga) in fora:
+            continue
+        nota, motivo = notas_por_id.get(
+            id(vaga), (nota_local, MOTIVO_SEM_IA)
+        )
+        completo.append((vaga, nota, motivo))
+    # IA/cache primeiro, pontuação local depois; nota decrescente dentro de cada grupo.
+    completo.sort(key=lambda item: (item[2] == MOTIVO_SEM_IA, -item[1]))
+    resultado.ranking_completo = completo
     return resultado
 
 

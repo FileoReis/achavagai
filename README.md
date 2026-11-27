@@ -100,9 +100,32 @@ A intenção da busca também é conferida no título e na descrição. CPD é t
 
 A análise por IA não deve ser tratada como garantia de contratação ou de exatidão absoluta. Confira a descrição original e os requisitos antes de se candidatar.
 
-## 6. Resultados
+## 6. Resultados e planilha Excel
 
-O programa remove duplicatas, verifica datas e requisitos, classifica as vagas e cria `vagas_encontradas_AAAAMMDD_HHMM.xlsx`. A planilha inclui links de candidatura clicáveis e uma aba com mensagens de candidatura quando `--com-mensagens` é utilizado.
+O programa remove duplicatas, verifica datas e requisitos, classifica as vagas e cria `vagas_encontradas_AAAAMMDD_HHMM.xlsx`.
+
+A planilha organiza os resultados em abas:
+
+- `Vagas`: visão principal com publicações cuja data pôde ser interpretada.
+- `Cargos pesquisados`: correspondência direta com os termos/intenções da busca.
+- `Compatíveis`: outros cargos que combinam com famílias profissionais comprovadas no currículo.
+- `Alternativas`: oportunidades que podem ser consideradas, mas não têm correspondência direta ou familiar forte.
+- `Data não confirmada`: anúncios sem data de publicação interpretável; não são misturados às publicações datadas.
+- `Todas as vagas`: **todo o universo que passou pelos filtros obrigatórios**, inclusive vagas fora do limite de análise individual do Gemini e vagas abaixo da nota mínima. A coluna `Base da pontuação` diferencia notas de IA/cache de similaridade local TF-IDF; notas locais não são comparáveis às notas de IA.
+- `Como abrir links`: instruções para corrigir a associação HTTP/HTTPS do Windows.
+- `Mensagens de Candidatura`: criada quando `--com-mensagens` é utilizado.
+
+Os links da coluna `Link` continuam sendo hyperlinks externos HTTPS normais no XLSX. A planilha não consegue definir qual aplicativo o Windows usa para abrir HTTP/HTTPS. Se clicar no link abrir o Explorador/Documentos, configure Google Chrome como aplicativo padrão para os protocolos HTTP e HTTPS em Configurações do Windows > Aplicativos > Aplicativos padrão.
+
+Ao lado de cada planilha é criado `abrir_links_chrome_<nome-da-planilha>.bat` e um arquivo `.ps1` correspondente. Ao terminar uma busca interativa, o próprio AchaVagAI mostra o nome da Central e oferece `B` + Enter para abri-la imediatamente. Também é possível dar dois cliques no `.bat` depois. A central colorida oferece:
+
+1. **Abrir uma vaga pelo número** — mostra a lista numerada e abre somente a vaga escolhida no Chrome.
+2. **Abrir a planilha Excel (.xlsx)** — abre o arquivo no Excel ou no aplicativo padrão do Windows.
+3. **Abrir o painel visual no navegador (.html)** — abre o painel da mesma pesquisa em uma nova janela do Chrome.
+4. **Abrir a pasta desta pesquisa** — mostra a pasta com Excel, HTML e atalhos.
+0. **Sair**.
+
+O `.bat` inicia o menu e o `.ps1` contém a lógica de abertura. Mantenha os dois arquivos juntos, na mesma pasta da planilha e do HTML. O atalho chama diretamente o `chrome.exe` para vagas e painel, sem depender da associação HTTP/HTTPS do Windows. Para a planilha, usa o aplicativo padrão associado a `.xlsx` (normalmente Excel). Se o Chrome não for encontrado automaticamente, o menu permite informar o caminho completo do `chrome.exe`. Cada escolha abre somente o destino selecionado; nenhuma vaga é aberta automaticamente.
 
 O histórico local permite marcar vagas novas e reaproveitar avaliações anteriores. Apague `.achavagai_historico.json` ou use `--sem-cache` para refazer avaliações.
 
@@ -135,7 +158,7 @@ Execute localmente:
 python -m pytest -q
 ```
 
-A suíte atual contém **510 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
+A suíte atual contém **548 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
 
 ## 9. Estrutura
 
@@ -143,9 +166,23 @@ A suíte atual contém **510 testes automatizados**, executados sem acessar os s
 - `resume_parser.py`: leitura/estruturação do currículo.
 - `matcher.py`: ranking por IA e alternativa local.
 - `ia.py`: clientes Gemini/Claude, retries e seleção de modelo.
-- `intencao_busca.py`: correspondência entre termos pesquisados e vagas.
+- `intencao_busca.py`: correspondência entre termos pesquisados e vagas, inclusive títulos com espaços ausentes.
+- `classificacao.py`: separa pesquisas diretas, vagas compatíveis e alternativas.
+- `exportar.py`: planilha por categorias/datas e atalho de abertura direta no Chrome.
 - `habilitacao.py`, `filtros.py`: filtros objetivos.
 - `scrapers/`: coletores, parser adaptativo e diagnósticos.
 - `tests/`: testes automatizados.
 
 Consulte `CHANGELOG.md` para o histórico das alterações.
+
+### Inicialização e leitura de PDF
+O leitor `pdfplumber` é carregado sob demanda, somente quando o currículo é aberto. Assim, a tela inicial e `python main.py --help` não precisam carregar antecipadamente `pdfminer` e `cryptography`. Ao executar normalmente, o terminal mostra o tempo de carregamento dos módulos e avisa quando começa a preparar o leitor de PDF.
+
+## Painel visual HTML
+
+Ao terminar uma pesquisa, o AchaVagAI gera automaticamente um arquivo `vagas_encontradas_<data-hora>.html` ao lado da planilha Excel. Abra-o com dois cliques no navegador. O painel é autocontido e funciona localmente, sem servidor, hospedagem, CDN ou conexão externa para carregar a interface.
+
+O painel HTML tem identidade visual premium, responsiva e autocontida, com pesquisa por texto, filtro por fonte, categorias, ordenação, cartões com pontuação/origem da nota, descrição e links para o anúncio. **Seu conjunto de vagas espelha exatamente a primeira aba `Vagas` do Excel**: apenas publicações com data interpretável. Anúncios sem data não aparecem no HTML e permanecem exclusivamente na aba `Data não confirmada` do workbook. Excel e HTML compartilham o mesmo seletor de registros para evitar divergência. Notas de similaridade local ficam identificadas separadamente das avaliações IA/cache. O HTML não inclui currículo, nome do candidato, chaves API ou histórico pessoal.
+
+### Correção do menu de links no Chrome
+O atalho `.bat` chama o `.ps1` correspondente. O menu agora lê um objeto JSON por linha e valida título/URL como valores escalares. Ao escolher um número, somente o link daquele registro é enviado ao Chrome. Se você tiver atalhos antigos que exibem `System.Object[]`, gere uma nova planilha para criar novos arquivos `.bat` e `.ps1` corrigidos; não é necessário editar o atalho antigo manualmente.

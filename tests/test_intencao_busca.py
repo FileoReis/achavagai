@@ -43,3 +43,19 @@ def test_varios_termos_sao_uniao_or_e_preservam_os_relevantes():
     mantidas, descartadas = filtrar_por_intencao(vagas, ["CPD", "Motorista", "Informática"])
     assert [x.titulo for x in mantidas] == ["Auxiliar de CPD", "Motorista B", "Técnico de Informática"]
     assert [x.titulo for x in descartadas] == ["Vendedor"]
+
+
+def test_reconhece_titulo_concatenado_tecnico_deinformatica_n1():
+    intencoes = compilar_intencoes(["Informática"])
+    assert vaga_corresponde(vaga("Técnico deInformaticaN1"), intencoes)
+
+
+def test_reconhece_titulo_concatenado_motoristacarga():
+    intencoes = compilar_intencoes(["Motorista"])
+    assert vaga_corresponde(vaga("MotoristaCarga"), intencoes)
+
+
+def test_cpd_continua_sem_confundir_pcd_apos_flexibilidade():
+    intencoes = compilar_intencoes(["CPD"])
+    assert vaga_corresponde(vaga("Auxiliar de CPD"), intencoes)
+    assert not vaga_corresponde(vaga("Assistente PCD"), intencoes)

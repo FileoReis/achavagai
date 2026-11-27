@@ -278,3 +278,46 @@ def test_varios_cargos_alternam_na_ordem_de_avaliacao(vaga):
 def test_ranquear_antigo_continua_devolvendo_tupla(vaga, com_ia):
     ranking, usou_ia = matcher.ranquear(CURRICULO, vagas_de(vaga, 3))
     assert usou_ia is True and len(ranking) == 3
+
+
+def test_justificativa_nao_pode_afirmar_experiencia_de_motorista_sem_evidencia():
+    nota, motivo = matcher._revisar_por_evidencia(
+        95,
+        "Possui CNH B e experiência comprovada como motorista de carga.",
+        "CNH A e B. Logística, estoque e distribuição.",
+        {},
+    )
+    assert nota == 68
+    assert "não está comprovada" in motivo
+
+
+def test_justificativa_de_cpd_sem_evidencia_e_corrigida():
+    nota, motivo = matcher._revisar_por_evidencia(
+        95,
+        "Experiência anterior como auxiliar de CPD e suporte de TI.",
+        "Experiência em suporte técnico, redes e informática.",
+        {},
+    )
+    assert nota == 65
+    assert "CPD não está comprovada" in motivo
+
+
+def test_ranking_completo_preserva_vagas_fora_do_limite_da_ia(vaga, com_ia, monkeypatch):
+    monkeypatch.setattr(config, "IA_TOP_ANALISE", 1)
+    vagas = [vaga(titulo=f"Vaga {i}", descricao="controle de estoque e atendimento") for i in range(5)]
+    resultado = matcher.ranquear_detalhado(CURRICULO, vagas, top_n=1)
+
+    assert len(resultado.ranking) == 1  # apenas uma vaga recebeu nota da IA
+    assert len(resultado.ranking_completo) == 5  # todas permanecem disponíveis para o XLSX
+    locais = [item for item in resultado.ranking_completo if item[2] == MOTIVO_SEM_IA]
+    assert len(locais) == 4
+
+
+def test_ranking_completo_exclui_vaga_reprovada_apos_leitura(vaga, com_ia):
+    vagas = [vaga(titulo="Vaga boa"), vaga(titulo="Vaga encerrada")]
+    resultado = matcher.ranquear_detalhado(
+        CURRICULO, vagas, top_n=2, eliminatoria=lambda v: "encerrada" if "encerrada" in v.titulo.lower() else None,
+    )
+    titulos = [v.titulo for v, _nota, _motivo in resultado.ranking_completo]
+    assert "Vaga boa" in titulos
+    assert "Vaga encerrada" not in titulos

@@ -22,19 +22,26 @@ Fluxo:
   5. Reaproveita notas de execuções anteriores (cache) e marca as vagas NOVAS.
   6. Gera mensagens de candidatura para as melhores vagas (se IA disponível e
      --com-mensagens).
-  7. Salva os resultados em uma planilha Excel (.xlsx) e mostra as melhores vagas
-     no terminal.
+  7. Salva os resultados em uma planilha Excel (.xlsx), um painel visual local HTML
+     e mostra as melhores vagas no terminal.
 
 Dá para rodar sem nenhuma pergunta: veja --sim, --cidade, --cargo, --dias e --saida.
 """
 
 from __future__ import annotations
 
+# Mostra atividade imediatamente, antes de carregar dependências externas.
+# Isso evita que a janela pareça congelada enquanto os módulos são importados.
+import time
+_BOOT_INICIO = time.monotonic()
+_EXECUTADO_COMO_SCRIPT = __name__ == "__main__"
+if _EXECUTADO_COMO_SCRIPT:
+    print("AchaVagAI: inicializando componentes...", flush=True)
+
 import argparse
 import glob
 import os
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +62,7 @@ import descricoes
 import ia
 from config import NOTA_MINIMA_PADRAO, SITES_ATIVOS, UF_ALVO
 from exportar import salvar_excel
+from classificacao import classificar_vaga
 from filtros import (
     dividir_palavras_chave,
     enriquecer_vaga,
@@ -100,6 +108,91 @@ console = Console()
 
 def _cfg(nome: str, padrao):
     return getattr(config, nome, padrao)
+
+
+def _gerar_painel_html(ranking_exportacao, caminho_xlsx, novas, termos_busca, perfil, filtros, dias_maximo):
+    """Gera o painel local HTML usando exatamente a mesma base do Excel."""
+    try:
+        # Importação local para não aumentar o tempo de inicialização do CLI.
+        from html_report import salvar_html
+
+        destino_html = Path(caminho_xlsx).with_suffix(".html")
+        return salvar_html(
+            ranking_exportacao,
+            destino_html,
+            novas=novas,
+            termos_busca=termos_busca,
+            perfil=perfil,
+            metadata={
+                "cidade": filtros.get("cidade", ""),
+                "bairro": filtros.get("bairro", ""),
+                "uf": UF_ALVO,
+                "dias_maximo": dias_maximo,
+            },
+        )
+    except Exception as erro:
+        console.print(f"[yellow]Não foi possível gerar o painel HTML: {escape(type(erro).__name__)}: {escape(str(erro)[:240])}[/yellow]")
+        return None
+
+
+def _mostrar_central_resultados(salvo: Path, html_salvo: Path | None, args) -> None:
+    """Mostra a Central .BAT e, em execução interativa, permite abri-la imediatamente."""
+    salvo = Path(salvo)
+    atalho_bat = salvo.with_name(f"abrir_links_chrome_{salvo.stem}.bat")
+    atalho_ps1 = salvo.with_name(f"abrir_links_chrome_{salvo.stem}.ps1")
+
+    console.print()
+    console.print(Panel(
+        "[bold green]SUA PESQUISA ESTÁ PRONTA![/bold green]\n\n"
+        "Para consultar as oportunidades, abra a [bold cyan]CENTRAL DE RESULTADOS (.BAT)[/bold cyan]:\n"
+        f"[bold white]{escape(atalho_bat.name)}[/bold white]\n\n"
+        "Dentro dela, escolha como deseja acessar suas vagas:\n"
+        "[green]1[/green]  Abrir uma vaga pelo número (uma por vez)\n"
+        "[cyan]2[/cyan]  Abrir a planilha Excel (.xlsx)\n"
+        "[magenta]3[/magenta]  Abrir o painel visual no navegador (.html)\n"
+        "[yellow]4[/yellow]  Abrir a pasta desta pesquisa\n"
+        "[red]0[/red]  Sair",
+        title="[bold cyan]ACHA VAGAI | CENTRAL DE RESULTADOS[/bold cyan]",
+        border_style="green",
+        padding=(1, 2),
+    ))
+    console.print(f"[dim]Planilha: {escape(salvo.name)}[/dim]")
+    if html_salvo:
+        console.print(f"[dim]Painel: {escape(Path(html_salvo).name)}[/dim]")
+    if not atalho_bat.is_file():
+        console.print("[yellow]O atalho .BAT não foi criado. Confira se há links HTTP/HTTPS válidos nas vagas.[/yellow]")
+        return
+    if not atalho_ps1.is_file():
+        console.print("[yellow]O arquivo auxiliar .PS1 não foi encontrado ao lado do .BAT.[/yellow]")
+        return
+
+    console.print(f"[bold green]Central criada:[/bold green] [cyan]{escape(str(atalho_bat))}[/cyan]")
+    # --sim significa execução sem interação; nesse caso apenas mostra o caminho.
+    if args.sim or not getattr(sys.stdin, "isatty", lambda: False)():
+        console.print("[bold yellow]Dê dois cliques no arquivo .BAT acima para abrir o menu de resultados.[/bold yellow]")
+        return
+
+    resposta = console.input("\n[bold yellow]Digite [B] e pressione Enter para abrir a Central agora, ou pressione Enter para encerrar: [/bold yellow]")
+    if resposta.strip().casefold() == "b":
+        iniciar = getattr(os, "startfile", None)
+        if sys.platform == "win32" and callable(iniciar):
+            try:
+                iniciar(str(atalho_bat))
+                console.print("[bold green]Central de resultados aberta em uma nova janela.[/bold green]")
+            except OSError as erro:
+                console.print(f"[red]Não consegui abrir o .BAT automaticamente: {escape(str(erro)[:220])}[/red]")
+                console.print("[yellow]Abra-o manualmente com dois cliques no Explorador de Arquivos.[/yellow]")
+        else:
+            console.print("[yellow]A abertura automática está disponível no Windows. Execute o .BAT manualmente neste sistema.[/yellow]")
+
+
+def _gerar_painel_vazio(args, filtros, perfil, termos_busca):
+    """Mesmo uma busca sem resultados gera uma página explicando que não houve vagas."""
+    pasta_saida = Path(args.saida) if args.saida else Path(".")
+    nome_base = pasta_saida / f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    html_salvo = _gerar_painel_html([], nome_base.with_suffix(".xlsx"), set(), termos_busca, perfil, filtros, None)
+    if html_salvo:
+        console.print(f"[dim]Painel HTML sem resultados salvo em: {escape(str(html_salvo))}[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +575,8 @@ def exibir_perfil(perfil) -> None:
             "[yellow]A extração por IA do currículo falhou, então usei a extração local acima. "
             f"Motivo: {escape(perfil.erro_ia)}[/yellow]"
         )
+    for aviso in getattr(perfil, "avisos_evidencia", []) or []:
+        console.print(f"[yellow]Validação de evidência do currículo: {escape(aviso)}[/yellow]")
 
 
 def exibir_resultados(ranking: list, top_n: int, novas: set[int] | None = None) -> None:
@@ -581,6 +676,8 @@ def _mensagem_scrapers_ausentes() -> None:
 
 
 def _executar(args) -> None:
+    if _EXECUTADO_COMO_SCRIPT:
+        console.print(f"[dim]Módulos carregados em {time.monotonic() - _BOOT_INICIO:.2f}s.[/dim]")
     if args.sem_ia:
         ia.desativar()
     # Começa direto pelo modelo que funcionou da última vez e mostra, uma vez só, por que
@@ -600,6 +697,7 @@ def _executar(args) -> None:
     caminho_pdf = resolver_caminho_pdf(args.curriculo_pdf, automatico=args.sim)
 
     console.print(f"[dim]Lendo currículo:[/dim] {escape(caminho_pdf)}")
+    console.print("[dim]Carregando o leitor de PDF e extraindo o texto do currículo...[/dim]")
     try:
         perfil = analisar_curriculo(caminho_pdf)
     except CurriculoInvalido as erro:
@@ -619,6 +717,7 @@ def _executar(args) -> None:
 
     if not vagas:
         console.print("[red]Nenhuma vaga encontrada. Tente ajustar a palavra-chave ou verifique sua conexão.[/red]")
+        _gerar_painel_vazio(args, filtros, perfil, dividir_palavras_chave(filtros.get("palavra_chave", "")))
         sys.exit(0)
 
     for vaga in vagas:  # preenche empresa/cidade vazios ANTES de filtrar e de a IA avaliar
@@ -638,6 +737,7 @@ def _executar(args) -> None:
 
     if not vagas:
         console.print("[yellow]As fontes devolveram anúncios, mas nenhum correspondia aos cargos escolhidos. Revise as palavras-chave ou amplie os sinônimos.[/yellow]")
+        _gerar_painel_vazio(args, filtros, perfil, termos_intencao)
         sys.exit(0)
 
     try:
@@ -654,6 +754,7 @@ def _executar(args) -> None:
 
     if not vagas:
         console.print("[red]Nenhuma vaga passou do filtro de data. Tente aumentar o número de dias.[/red]")
+        _gerar_painel_vazio(args, filtros, perfil, termos_intencao)
         sys.exit(0)
 
     if _cfg("FILTRAR_VAGAS_ENCERRADAS", True):
@@ -670,6 +771,8 @@ def _executar(args) -> None:
                 console.print(f"[dim]  ... e mais {len(encerradas) - 3}.[/dim]")
         if not vagas:
             console.print("[red]Todas as vagas encontradas já estavam encerradas. Tente de novo mais tarde ou ajuste a busca.[/red]")
+            _gerar_painel_vazio(args, filtros, perfil, termos_intencao)
+            sys.exit(0)
             sys.exit(0)
 
     vagas, removidas_por_regiao = filtrar_por_regiao(vagas)
@@ -728,6 +831,9 @@ def _executar(args) -> None:
                 "cargos_compativeis": getattr(perfil, "cargos_compativeis", []),
                 "experiencias_relevantes": getattr(perfil, "experiencias_relevantes", []),
                 "formacao": getattr(perfil, "formacao", []),
+                "experiencia_conducao_comprovada": getattr(perfil, "experiencia_conducao_comprovada", False),
+                "objetivo_conducao_declarado": getattr(perfil, "objetivo_conducao_declarado", False),
+                "experiencia_cpd_comprovada": getattr(perfil, "experiencia_cpd_comprovada", False),
             }
             chave_ctx = chave_do_contexto(perfil.texto_para_ia, contexto, PROMPT_VERSAO)
             ia.aviso_callback = lambda texto: console.print(f"  [dim]{escape(texto)}[/dim]")
@@ -765,6 +871,9 @@ def _executar(args) -> None:
                     eliminatoria=regra_depois_da_leitura,
                 )
             ranking, usou_ia = resultado.ranking, resultado.usou_ia
+            # A tela usa o subconjunto avaliado por IA/cache; o Excel recebe todo
+            # o universo elegível, com TF-IDF explicitamente identificado no restante.
+            ranking_exportacao = resultado.ranking_completo or resultado.ranking
         else:
             console.print(
                 "\n[yellow]Nenhuma chave de IA configurada, usando ranking local (TF-IDF), mais simples.[/yellow]\n"
@@ -772,6 +881,9 @@ def _executar(args) -> None:
                 "https://aistudio.google.com/apikey e salve em um arquivo .env como GEMINI_API_KEY=sua-chave.[/dim]"
             )
             ranking, usou_ia = ranquear_por_similaridade(perfil.texto_para_ia, vagas), False
+            ranking_exportacao = [
+                (vaga, nota, MOTIVO_SEM_IA) for vaga, nota, _motivo in ranking
+            ]
     finally:
         ia.aviso_callback = None
         historico.salvar()  # guarda as notas já obtidas, mesmo que algo tenha falhado depois
@@ -788,11 +900,37 @@ def _executar(args) -> None:
             console.print("[dim]Sem notas da IA, a nota mínima não foi aplicada (a pontuação local não é comparável). Use --nota-minima para forçar.[/dim]")
 
     total_antes_filtro = len(ranking)
-    ranking_completo = ranking  # guarda a lista completa (antes do filtro) para diagnóstico, se precisar
+    ranking_antes_nota_minima = ranking  # ranking avaliado, antes do corte de nota
     ranking = [item for item in ranking if item[1] >= nota_minima or item[2] == MOTIVO_SEM_IA]
     descartadas = total_antes_filtro - len(ranking)
     if descartadas:
         console.print(f"[dim]{descartadas} vaga(s) abaixo de {nota_minima:.0f}% de aderência foram descartadas (ajuste com --nota-minima).[/dim]")
+
+    # O resumo e o Excel usam o mesmo universo completo. As categorias contam somente
+    # vagas com data interpretável; anúncios sem data aparecem numa aba própria.
+    contagem_categorias = {"Pesquisa direta": 0, "Compatível com currículo": 0, "Alternativa": 0}
+    sem_data_exportacao = 0
+    avaliadas_ia_cache = 0
+    somente_local = 0
+    for vaga_item, _nota_item, motivo_item in ranking_exportacao:
+        if idade_em_dias(getattr(vaga_item, "data_publicacao", "")) is None:
+            sem_data_exportacao += 1
+        else:
+            categoria = classificar_vaga(vaga_item, termos_intencao, perfil)
+            contagem_categorias[categoria] = contagem_categorias.get(categoria, 0) + 1
+        if motivo_item == MOTIVO_SEM_IA:
+            somente_local += 1
+        else:
+            avaliadas_ia_cache += 1
+    console.print(
+        "[dim]Universo exportado (após filtros obrigatórios): "
+        f"{len(ranking_exportacao)} vaga(s). Com data confirmada: "
+        f"{contagem_categorias['Pesquisa direta']} pesquisada(s), "
+        f"{contagem_categorias['Compatível com currículo']} compatível(is), "
+        f"{contagem_categorias['Alternativa']} alternativa(s). "
+        f"Sem data confirmada: {sem_data_exportacao}. "
+        f"Avaliação: {avaliadas_ia_cache} IA/cache, {somente_local} pontuação local (sem avaliação IA).[/dim]"
+    )
 
     pasta_saida = Path(args.saida) if args.saida else Path(".")
     nome_arquivo = pasta_saida / f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -805,13 +943,23 @@ def _executar(args) -> None:
             "o título pareça relacionado.[/yellow]\n"
             "[dim]Veja abaixo as vagas com maior nota mesmo assim, para entender o motivo:[/dim]"
         )
-        exibir_resultados(ranking_completo, min(5, len(ranking_completo)))
-        console.print("\n[dim]Se quiser ver todas mesmo abaixo da nota mínima, rode de novo com --nota-minima 0.[/dim]")
-        salvo = salvar_excel(ranking_completo, [], nome_arquivo)
-        console.print(f"\n[bold green]✓[/bold green] Mesmo assim, salvei todas as vagas avaliadas (com nota e motivo) em: [bold]{escape(str(salvo))}[/bold]")
+        exibir_resultados(ranking_antes_nota_minima, min(5, len(ranking_antes_nota_minima)))
+        console.print("\n[dim]A planilha mantém o universo elegível completo; vagas avaliadas abaixo do corte ficam identificadas na coluna 'Situação da nota'.[/dim]")
+        salvo = salvar_excel(
+            ranking_exportacao, [], nome_arquivo, termos_busca=termos_intencao,
+            perfil=perfil, nota_minima=nota_minima,
+        )
+        console.print(f"\n[bold green]✓[/bold green] Mesmo assim, salvei todo o universo elegível, incluindo vagas com pontuação local: [bold]{escape(str(salvo))}[/bold]")
+        novas_html = {id(vaga) for vaga, _, _ in ranking_exportacao if historico.eh_nova(vaga)}
+        html_salvo = _gerar_painel_html(
+            ranking_exportacao, salvo, novas_html, termos_intencao, perfil, filtros, dias_maximo
+        )
+        if html_salvo:
+            console.print(f"[bold green]✓[/bold green] Painel visual HTML salvo em: [bold]{escape(str(html_salvo))}[/bold]")
+        _mostrar_central_resultados(salvo, html_salvo, args)
         sys.exit(0)
 
-    novas = {id(vaga) for vaga, _, _ in ranking if historico.eh_nova(vaga)}
+    novas = {id(vaga) for vaga, _, _ in ranking_exportacao if historico.eh_nova(vaga)}
     if novas:
         console.print(f"[dim]{len(novas)} vaga(s) nova(s) desde a última execução estão marcadas como NOVA.[/dim]")
 
@@ -825,12 +973,16 @@ def _executar(args) -> None:
             mensagens = gerar_mensagens_top(perfil.texto_para_ia, ranking, quantidade=args.top_mensagens)
         exibir_mensagens(mensagens)
 
-    salvo = salvar_excel(ranking, mensagens, nome_arquivo, novas)
-    console.print(f"\n[bold green]✓[/bold green] Resultados completos salvos em: [bold]{escape(str(salvo))}[/bold]")
-    console.print("[dim]Abra no Excel: os links já são clicáveis; mensagens de candidatura ficam na segunda aba.[/dim]")
-
-    historico.registrar_vistas([vaga for vaga, _, _ in ranking])
+    salvo = salvar_excel(
+        ranking_exportacao, mensagens, nome_arquivo, novas,
+        termos_busca=termos_intencao, perfil=perfil, nota_minima=nota_minima,
+    )
+    html_salvo = _gerar_painel_html(
+        ranking_exportacao, salvo, novas, termos_intencao, perfil, filtros, dias_maximo
+    )
+    historico.registrar_vistas([vaga for vaga, _, _ in ranking_exportacao])
     historico.salvar()
+    _mostrar_central_resultados(salvo, html_salvo, args)
 
 
 def _avisar_descartadas_por_cnh(descartadas: list, categorias, depois_da_analise: bool = False) -> None:
@@ -883,6 +1035,10 @@ def _resumo_da_ia(resultado, nome_provedor: str | None) -> None:
             )
         if resultado.realinhadas:
             console.print(f"[dim]A IA colocou {resultado.realinhadas} nota(s) na vaga errada; corrigi conferindo o título.[/dim]")
+        if getattr(resultado, "evidencias_corrigidas", 0):
+            console.print(
+                f"[yellow]{resultado.evidencias_corrigidas} justificativa(s) foram corrigidas porque atribuíam experiência em motorista ou CPD sem evidência no currículo.[/yellow]"
+            )
         if resultado.sem_correspondencia:
             console.print(
                 f"[dim]{resultado.sem_correspondencia} avaliação(ões) da IA não correspondiam a nenhuma vaga do lote "
@@ -890,8 +1046,9 @@ def _resumo_da_ia(resultado, nome_provedor: str | None) -> None:
             )
         if resultado.fora_do_limite:
             console.print(
-                f"[dim]{resultado.fora_do_limite} vaga(s) de menor afinidade textual ficaram fora da análise da IA "
-                f"(limite IA_TOP_ANALISE no config.py). Rodando de novo, as próximas entram.[/dim]"
+                f"[dim]{resultado.fora_do_limite} vaga(s) não foram avaliadas individualmente pela IA "
+                f"por causa do limite IA_TOP_ANALISE no config.py. Elas continuam na planilha completa "
+                "com pontuação TF-IDF local, identificada como não avaliada pela IA.[/dim]"
             )
     else:
         console.print(

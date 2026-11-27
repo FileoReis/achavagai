@@ -81,7 +81,7 @@ class App:
         return load_workbook(arquivos[-1])
 
     def linhas(self):
-        aba = self.planilha()["Vagas"]
+        aba = self.planilha()["Todas as vagas"]
         cabecalho = [c.value for c in aba[1]]
         return [dict(zip(cabecalho, [c.value for c in linha])) for linha in aba.iter_rows(min_row=2)]
 
@@ -487,3 +487,72 @@ def test_ia_que_troca_as_notas_de_lugar_e_corrigida_no_fluxo_completo(app, monke
         assert linha["Motivo (IA)"] == f"motivo de {linha['Cargo / Título']}"
         assert linha["Pontuação (%)"] == notas[linha["Cargo / Título"]]
     assert "A IA colocou 3 nota(s) na vaga errada; corrigi conferindo o título." in app.texto
+
+
+def test_excel_recebe_todo_universo_mesmo_quando_ia_avalia_so_o_top_n(app, ia_falsa, monkeypatch):
+    monkeypatch.setattr(config, "IA_TOP_ANALISE", 1)
+    app.fontes["linkedin"] = []
+    app.fontes["indeed"] = []
+    app.fontes["vagas_com"] = []
+    app.fontes["infojobs"] = []
+    app.fontes["wordpress"] = [
+        app.v(titulo="Auxiliar Administrativo Alta", empresa="A", cidade="Rio de Janeiro, RJ",
+              link="https://portal.exemplo/a", data_publicacao="hoje", descricao="Rotinas administrativas e atendimento."),
+        app.v(titulo="Recepcionista", empresa="B", cidade="Rio de Janeiro, RJ",
+              link="https://portal.exemplo/b", data_publicacao="", descricao="Atendimento ao cliente e rotinas administrativas."),
+        app.v(titulo="Auxiliar Administrativo Baixa", empresa="C", cidade="Rio de Janeiro, RJ",
+              link="https://portal.exemplo/c", data_publicacao="ontem", descricao="Rotinas administrativas e atendimento."),
+    ]
+    app.rodar("--sem-analise-profunda", cargo="auxiliar administrativo, recepcionista")
+
+    # Uma vaga recebeu nota da IA; as outras duas devem continuar disponíveis no XLSX.
+    assert "1 vaga(s) avaliada(s) agora" in app.texto
+    assert len(app.linhas()) == 3
+    wb = app.planilha()
+    assert wb["Vagas"].max_row == 3  # 2 com data + cabeçalho
+    assert wb["Data não confirmada"].max_row == 2  # 1 sem data + cabeçalho
+    assert wb["Todas as vagas"].max_row == 4  # 3 vagas + cabeçalho
+    assert "Universo exportado (após filtros obrigatórios): 3 vaga(s)" in app.texto
+    assert "Sem data confirmada: 1" in app.texto
+    assert "1 IA/cache, 2 pontuação local" in app.texto
+
+
+def test_resultado_final_exibe_central_bat_e_opcao_de_menu(app):
+    app.fontes["wordpress"] = [
+        app.v(titulo="Auxiliar Administrativo Alta", empresa="Empresa A",
+              cidade="Rio de Janeiro, RJ", link="https://portal.exemplo/adm",
+              data_publicacao="hoje", descricao="Rotinas administrativas e atendimento."),
+    ]
+    app.rodar("--sem-ia", "--sem-analise-profunda", cargo="auxiliar administrativo")
+    texto = app.texto
+    assert "CENTRAL DE RESULTADOS (.BAT)" in texto
+    assert "abrir_links_chrome_vagas_encontradas_" in texto
+    assert "Abrir uma vaga pelo número" in texto
+    assert "Abrir a planilha Excel" in texto
+    assert "Abrir o painel visual no navegador" in texto
+
+
+def test_opcao_b_da_mensagem_final_abre_o_bat_no_windows(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import io
+
+    bat = tmp_path / "abrir_links_chrome_resultado.bat"
+    ps1 = tmp_path / "abrir_links_chrome_resultado.ps1"
+    xlsx = tmp_path / "resultado.xlsx"
+    html = tmp_path / "resultado.html"
+    for arquivo in (bat, ps1, xlsx, html):
+        arquivo.write_text("teste", encoding="utf-8")
+
+    aberta = []
+    tela = io.StringIO()
+    monkeypatch.setattr(main, "console", Console(file=tela, width=200, color_system=None))
+    monkeypatch.setattr(main.console, "input", lambda prompt: "B")
+    monkeypatch.setattr(main.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    monkeypatch.setattr(main.os, "startfile", lambda caminho: aberta.append(caminho), raising=False)
+
+    main._mostrar_central_resultados(xlsx, html, SimpleNamespace(sim=False))
+
+    assert aberta == [str(bat)]
+    assert "CENTRAL DE RESULTADOS (.BAT)" in tela.getvalue()
+    assert "Central de resultados aberta em uma nova janela" in tela.getvalue()

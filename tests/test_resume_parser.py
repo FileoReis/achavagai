@@ -142,3 +142,36 @@ def test_falha_da_ia_guarda_o_motivo_para_o_main_avisar(com_ia):
     perfil = rp.analisar_curriculo(PDF)
     assert perfil.extraido_por_ia is False and perfil.erro_ia == "Cota esgotada"
     assert perfil.cargo_sugerido == "Auxiliar Administrativo"
+
+
+def test_cnh_e_logistica_nao_comprovam_experiencia_como_motorista():
+    assert rp._comprova_experiencia_conducao("CNH A/B\nLogística e distribuição\nControle de estoque") is False
+
+
+def test_cargo_de_motorista_em_historico_profissional_evidencia_experiencia():
+    texto = "Experiência Profissional\nMotorista - Empresa X\n2020 a 2023\nEntregas e coletas."
+    assert rp._comprova_experiencia_conducao(texto) is True
+
+
+def test_validacao_remove_motorista_e_cpd_sem_evidencia():
+    from resume_parser import PerfilCandidato, _validar_perfil_por_evidencias
+    p = PerfilCandidato(
+        texto_completo="CNH B\nLogística e distribuição\nSuporte técnico e informática",
+        texto_para_ia="CNH B\nLogística e distribuição\nSuporte técnico e informática",
+        cargo_sugerido="Motorista de Carga",
+        cargos_compativeis=["Motorista de Carga", "Estoquista", "Auxiliar de CPD"],
+        areas_atuacao=["Logística e Mobilidade", "Suporte Técnico e TI"],
+        experiencias_relevantes=[
+            {"cargo": "Motorista de Carga", "periodo": "2020-2022", "atividades": ["entregas"], "evidencias": []},
+            {"cargo": "Auxiliar de CPD", "periodo": "2021-2022", "atividades": ["processamento"], "evidencias": []},
+        ],
+    )
+    _validar_perfil_por_evidencias(p, "Gerente Operacional")
+    assert p.cargo_sugerido == "Gerente Operacional"
+    assert "Motorista de Carga" not in p.cargos_compativeis
+    assert "Auxiliar de CPD" not in p.cargos_compativeis
+    assert p.cargos_compativeis == ["Estoquista"]
+    assert p.experiencias_relevantes == []
+    assert "Logística e Distribuição" in p.areas_atuacao
+    assert not p.experiencia_conducao_comprovada
+    assert not p.experiencia_cpd_comprovada

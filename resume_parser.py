@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import pdfplumber
 
 import ia
 from config import BAIRROS_RJ, CARGOS_COMUNS, CIDADES_RJ, SKILL_KEYWORDS
@@ -75,6 +74,10 @@ class PerfilCandidato:
     cargos_compativeis: list[str] = field(default_factory=list)
     experiencias_relevantes: list[dict] = field(default_factory=list)
     formacao: list[str] = field(default_factory=list)
+    experiencia_conducao_comprovada: bool = False
+    objetivo_conducao_declarado: bool = False
+    experiencia_cpd_comprovada: bool = False
+    avisos_evidencia: list[str] = field(default_factory=list)
 
 
 def _limpar_texto(texto: str) -> str:
@@ -89,6 +92,16 @@ def extrair_texto_pdf(caminho_pdf: str) -> str:
     """Extrai todo o texto de um PDF usando pdfplumber. Lança CurriculoInvalido com
     uma mensagem clara quando não é possível (arquivo ausente, corrompido, com
     senha, ou PDF escaneado, que é só imagem)."""
+    # pdfplumber importa pdfminer e cryptography, que podem levar alguns segundos
+    # na primeira carga. Importá-lo aqui (e não no topo do módulo) mantém a
+    # inicialização do AchaVagAI e o comando --help rápidos.
+    try:
+        import pdfplumber
+    except ImportError as erro:
+        raise CurriculoInvalido(
+            "Não consegui carregar o leitor de PDF. Execute: python -m pip install -r requirements.txt"
+        ) from erro
+
     try:
         with pdfplumber.open(caminho_pdf) as pdf:
             partes_texto = [(pagina.extract_text() or "") for pagina in pdf.pages]
@@ -244,6 +257,104 @@ def _areas_locais(texto: str) -> list[str]:
     return [nome for nome, termos in grupos.items() if any(normalizar_texto(t) in base for t in termos)]
 
 
+_TERMOS_CONDUCAO = re.compile(r"\b(motorista|condutor(?:a)?|entregador(?:a)?|motoboy|motofretista)\b", re.I)
+_TERMOS_EXPERIENCIA = re.compile(r"\b(experi\w*|trabalh\w*|atu\w*|cargo|fun[cç][aã]o|empresa|admitid\w*|contratad\w*|per[ií]odo)\b", re.I)
+_TERMOS_OBJETIVO = re.compile(r"\b(objetivo|cargo pretendido|cargo desejado|[aá]rea de interesse|pretens[aã]o)\b", re.I)
+_TERMOS_CPD = re.compile(r"\bcpd\b|\bcentral de processamento de dados\b|\bcentro de processamento de dados\b", re.I)
+
+
+def _contextos_de_linha(texto: str, padrao: re.Pattern) -> list[str]:
+    linhas = [re.sub(r"\s+", " ", linha).strip() for linha in (texto or "").splitlines()]
+    resultado = []
+    for indice, linha in enumerate(linhas):
+        if padrao.search(linha):
+            inicio = max(0, indice - 1)
+            fim = min(len(linhas), indice + 2)
+            resultado.append(" ".join(linhas[inicio:fim]))
+    return resultado
+
+
+def _comprova_experiencia_conducao(texto: str) -> bool:
+    """Exige menção ocupacional a condução, não apenas CNH ou logística."""
+    for trecho in _contextos_de_linha(texto, _TERMOS_CONDUCAO):
+        if re.search(r"\b(cnh|habilita[cç][aã]o|carteira)\b", trecho, re.I) and not _TERMOS_EXPERIENCIA.search(trecho):
+            continue
+        if _TERMOS_EXPERIENCIA.search(trecho) or re.search(r"\b(19|20)\d{2}\b", trecho):
+            return True
+        # Um cargo isolado em seção de experiência profissional também conta.
+        if re.search(r"\b(experi[eê]ncia profissional|hist[oó]rico profissional|trajet[oó]ria profissional)\b", trecho, re.I):
+            return True
+    return False
+
+
+def _declara_objetivo_conducao(texto: str) -> bool:
+    for trecho in _contextos_de_linha(texto, _TERMOS_CONDUCAO):
+        if _TERMOS_OBJETIVO.search(trecho):
+            return True
+    return False
+
+
+def _comprova_experiencia_cpd(texto: str) -> bool:
+    for trecho in _contextos_de_linha(texto, _TERMOS_CPD):
+        if _TERMOS_EXPERIENCIA.search(trecho) or re.search(r"\b(19|20)\d{2}\b", trecho):
+            return True
+    return False
+
+
+def _cargo_e_de_conducao(texto: str) -> bool:
+    return bool(_TERMOS_CONDUCAO.search(normalizar_texto(texto)))
+
+
+def _validar_perfil_por_evidencias(perfil: PerfilCandidato, cargo_local: str | None) -> None:
+    """Remove atribuições ocupacionais não sustentadas pelo texto original do PDF.
+
+    CNH e logística são competências úteis, mas não comprovam experiência dirigindo.
+    Da mesma forma, a busca do usuário por CPD não prova que o candidato já trabalhou
+    em CPD. Esta validação é local e não depende da resposta da IA.
+    """
+    texto = perfil.texto_para_ia or perfil.texto_completo
+    perfil.experiencia_conducao_comprovada = _comprova_experiencia_conducao(texto)
+    perfil.objetivo_conducao_declarado = _declara_objetivo_conducao(texto)
+    perfil.experiencia_cpd_comprovada = _comprova_experiencia_cpd(texto)
+
+    if not (perfil.experiencia_conducao_comprovada or perfil.objetivo_conducao_declarado):
+        antes = list(perfil.cargos_compativeis)
+        perfil.cargos_compativeis = [c for c in perfil.cargos_compativeis if not _cargo_e_de_conducao(c)]
+        if len(antes) != len(perfil.cargos_compativeis):
+            perfil.avisos_evidencia.append(
+                "Cargo de motorista/entregador removido da lista de compatibilidade: o currículo informa CNH/logística, mas não comprova essa ocupação nem declara esse objetivo."
+            )
+        if _cargo_e_de_conducao(perfil.cargo_sugerido or ""):
+            perfil.cargo_sugerido = cargo_local
+            perfil.avisos_evidencia.append(
+                "Cargo sugerido de condução desconsiderado por falta de evidência ocupacional no currículo."
+            )
+        perfil.areas_atuacao = [
+            "Logística e Distribuição" if "mobilidade" in normalizar_texto(area) else area
+            for area in perfil.areas_atuacao
+        ]
+
+    if not perfil.experiencia_conducao_comprovada:
+        filtradas = [e for e in perfil.experiencias_relevantes if not _cargo_e_de_conducao(e.get("cargo", ""))]
+        if len(filtradas) != len(perfil.experiencias_relevantes):
+            perfil.avisos_evidencia.append(
+                "Experiência como motorista/entregador não foi aceita porque não há cargo ou atividade correspondente no texto do currículo."
+            )
+        perfil.experiencias_relevantes = filtradas
+
+    if not perfil.experiencia_cpd_comprovada:
+        antes = list(perfil.cargos_compativeis)
+        perfil.cargos_compativeis = [c for c in perfil.cargos_compativeis if "cpd" not in normalizar_texto(c)]
+        perfil.experiencias_relevantes = [
+            e for e in perfil.experiencias_relevantes
+            if "cpd" not in normalizar_texto(e.get("cargo", ""))
+        ]
+        if len(antes) != len(perfil.cargos_compativeis):
+            perfil.avisos_evidencia.append(
+                "Experiência/cargo de CPD não comprovado no texto do currículo; CPD permanece como cargo pesquisado, não como experiência presumida."
+            )
+
+
 def analisar_curriculo(caminho_pdf: str) -> PerfilCandidato:
     """Lê o PDF e monta o PerfilCandidato com as informações identificadas.
     Tenta primeiro uma extração via IA (mais precisa: entende contexto, sinônimos
@@ -277,6 +388,7 @@ def analisar_curriculo(caminho_pdf: str) -> PerfilCandidato:
         cargos_compativeis=[cargo_sugerido] if cargo_sugerido else [],
     )
 
+    cargo_local = perfil.cargo_sugerido
     perfil_ia = _extrair_perfil_com_ia(perfil.texto_para_ia)
     if perfil_ia:
         # A IA tende a ser mais precisa que a extração por palavras-chave: usa os
@@ -309,6 +421,7 @@ def analisar_curriculo(caminho_pdf: str) -> PerfilCandidato:
         # poder avisar o usuário (em vez de usar a extração local sem explicação).
         perfil.erro_ia = ia.ultimo_erro
 
+    _validar_perfil_por_evidencias(perfil, cargo_local)
     return perfil
 
 
@@ -338,6 +451,10 @@ Responda SOMENTE em JSON válido, sem texto antes ou depois, no formato:
 
 REGRAS DE EXTRAÇÃO:
 - Não invente empresas, cargos, períodos, cursos, anos de experiência ou resultados.
+- Antes de afirmar experiência como motorista, condutor ou entregador, localize no currículo um cargo/atividade de condução em contexto profissional. CNH A/B, logística, expedição ou distribuição NÃO comprovam direção profissional.
+- Antes de afirmar experiência em CPD, localize a sigla CPD ou o nome completo em contexto de cargo/atividade profissional. O fato de o candidato pesquisar CPD não é evidência curricular.
+- Cada experiência relevante precisa conter ao menos uma evidência curta que exista literalmente ou de forma inequívoca no currículo. Se não houver evidência, omita a experiência.
+
 - Separe cargo exercido de cargo desejado. Uma habilidade isolada não comprova experiência naquele cargo.
 - Só inclua uma família profissional se existir experiência, objetivo declarado ou formação específica que a sustente.
 - CNH A/B isolada é apenas habilitação; não prova experiência nem interesse em trabalhar como motorista.

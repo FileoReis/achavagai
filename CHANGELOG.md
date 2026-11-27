@@ -102,3 +102,73 @@
 - Diagnóstico: registra URL solicitada e URL final após redirecionamento, removendo query e fragmentos; evita contar duas vezes o mesmo HTTPError no coletor compartilhado.
 - XML: a telemetria usa `ElementTree` para detectar bloqueios/resultados em feeds XML e não passa XML ao parser HTML do BeautifulSoup; o coletor Empregando Brasil informa Content-Type ao diagnóstico.
 - Testes: 510 testes automatizados passaram, incluindo schema JSON da Empregare, snapshots sanitizados, páginas WordPress sem resultados, fallback REST do VagasRio e aviso XML.
+
+
+## 27/11/2026 — Classificação baseada em evidências e correção dos links Excel
+
+- Perfil do currículo: inclui indicadores locais para distinguir experiência profissional comprovada como motorista/entregador, objetivo explícito de condução e experiência específica em CPD. CNH e logística isoladas não são tratadas como prova de atuação profissional ao volante.
+- Ranking IA: reforça instruções de evidência e revisa justificativas que afirmam experiência em condução ou CPD sem suporte no texto do currículo; quando necessário, corrige o motivo e limita a pontuação.
+- Intenção de busca: reconhece títulos concatenados como `Técnico deInformaticaN1` e `MotoristaCarga`, mantendo CPD separado de PCD.
+- Classificação profissional: adiciona `Pesquisa direta`, `Compatível com currículo` e `Alternativa`, sem promover motorista a compatível apenas por CNH/logística.
+- Planilha: cria abas separadas para cargos pesquisados, compatíveis, alternativas, datas não confirmadas e visão consolidada. A aba principal `Vagas` mantém publicações com data interpretável.
+- Links: mantém hyperlinks HTTPS externos corretos no XLSX e gera um `.BAT` + `.PS1` auxiliar que abre o Chrome diretamente, contornando apenas a associação errada do Windows quando o próprio usuário escolhe um link. Não altera configurações do Windows e não executa links automaticamente.
+- Segurança Excel: conserva neutralização de conteúdo externo que poderia ser interpretado como fórmula e valida URLs HTTP/HTTPS.
+- Testes: 525 testes automatizados passaram, incluindo classificação, evidências, separação por data, hyperlinks e criação do atalho auxiliar. Testes não acessam sites reais nem executam o PowerShell em Windows.
+
+## 2026-11-27 — Inicialização mais transparente e leitura de PDF sob demanda
+- `pdfplumber` agora é importado somente quando o currículo PDF é efetivamente lido.
+- `python main.py --help` e a importação de `resume_parser` não carregam `pdfminer`/`cryptography` desnecessariamente.
+- O programa mostra uma mensagem de inicialização imediatamente e informa o tempo de carregamento dos módulos.
+- A etapa de leitura do currículo informa explicitamente quando o leitor PDF está sendo carregado.
+- Erro de dependência ausente do leitor PDF agora apresenta orientação de instalação específica.
+
+
+## 27/11/2026 — Exportação do universo elegível e classificação consistente
+
+- Corrigida a perda de vagas fora do limite `IA_TOP_ANALISE`: o matcher preserva agora todas as oportunidades que passaram pelos filtros obrigatórios, mesmo quando não foram avaliadas individualmente pelo Gemini.
+- Vagas sem análise IA/cache recebem pontuação TF-IDF local, com a base e a situação explicitadas no Excel; essas notas não são comparáveis às notas da IA e não são submetidas ao corte mínimo da IA.
+- `Todas as vagas` passa a conter o universo elegível completo; `Vagas` contém as datas interpretáveis e `Data não confirmada` reúne todas as vagas sem data reconhecida. As três categorias profissionais são aplicadas por classificação do título e das evidências do perfil, sem transformar uma menção incidental na descrição em pesquisa direta.
+- A correspondência direta é baseada no título e em sinônimos profissionais; exemplos como `Técnico de TI Jr.` entram na área de Informática, enquanto uma vaga administrativa que apenas menciona CPD na descrição não vira automaticamente vaga de CPD.
+- Cargos de motorista não são classificados como compatíveis apenas porque o currículo menciona logística ou possui CNH; é necessária experiência de condução comprovada ou objetivo profissional explícito.
+- O resumo do terminal utiliza a mesma lista completa enviada ao Excel e informa separadamente quantas vagas têm pontuação IA/cache e quantas têm apenas pontuação local.
+- Testes: 535 testes automatizados aprovados.
+
+
+## 27/11/2026 — Painel visual HTML local
+
+- Ao final de cada pesquisa, o programa gera `vagas_encontradas_<data-hora>.html` ao lado do Excel. Se a busca não encontrar oportunidades, também cria um painel vazio com essa informação.
+- Painel premium responsivo, autocontido e offline: busca instantânea, filtros por categoria/fonte/data, ordenação por ordem original/data/título, cartões detalhados, links de candidatura e cópia de URL.
+- O HTML utiliza a mesma lista completa de vagas exportada no Excel e explicita a origem das notas (IA/cache ou TF-IDF local). Não compara numericamente notas locais e notas da IA para reordenar vagas.
+- O relatório não inclui currículo, nome do candidato, chaves API ou histórico pessoal; não utiliza CDN, analytics, fontes externas ou servidor.
+- Testes: 541 testes automatizados aprovados; testes de navegador Chromium verificaram filtros, ausência de erros JavaScript e responsividade a 390 px sem rolagem horizontal.
+
+### Correção do atalho de abertura no Chrome (2026-11-27)
+- Corrigido o gerador `.ps1` que podia interpretar a lista JSON como um único objeto com propriedades em array, exibindo `System.Object[]` no menu.
+- O payload agora usa JSON Lines: um registro independente por linha, com título e URL escalares.
+- A seleção do menu captura um único registro e abre somente a URL escolhida.
+- Registros com título/URL em formato de array ou URL fora de HTTP/HTTPS são ignorados com aviso.
+
+## 2026-11-27 — Painel HTML premium
+
+- Redesenho visual premium e responsivo do painel HTML.
+- Painel espelha exatamente a aba principal `Vagas` do Excel; registros sem data ficam somente na aba `Data não confirmada`.
+- Seletor de registros compartilhado entre exportador XLSX e gerador HTML.
+- Validação em Chromium desktop/mobile e testes de equivalência entre planilha e painel.
+
+
+## 27/11/2026 — Central de oportunidades no atalho BAT/PS1
+
+- O `.bat` agora configura título, cor e página de código do terminal e apresenta uma abertura mais amigável.
+- O `.ps1` apresenta um menu PowerShell colorido com opções para abrir o painel HTML no Chrome, abrir uma vaga individual ou abrir a pasta da pesquisa.
+- A opção do painel abre o HTML correspondente à planilha em uma nova janela do Chrome, usando caminho local convertido para URI `file://` (não depende da associação de arquivos HTML do Windows).
+- A opção de vaga continua abrindo apenas o registro selecionado, em nova aba; a leitura JSON Lines e a validação HTTP/HTTPS foram preservadas.
+- A busca pelo Chrome é feita sob demanda, apenas quando uma das opções de abertura é selecionada.
+- Testes adicionados para opções do menu, caminho do HTML, cores do BAT e seleção individual de URL.
+
+## 2026-11-27 — Central de resultados com Excel, HTML e vagas individuais
+- Menu PowerShell gerado pelo BAT agora oferece: vaga individual numerada, abrir planilha XLSX, abrir painel HTML no Chrome e abrir pasta.
+- O XLSX e o HTML são referenciados por nomes relativos à pasta do atalho, com nomes codificados em Base64 para preservar acentos e espaços.
+- A mensagem final do AchaVagAI apresenta instruções claras e permite digitar B para abrir o BAT imediatamente em uma nova janela no Windows.
+- O atalho continua sendo criado mesmo quando a pesquisa não tem links externos válidos, permitindo abrir a planilha, o painel ou a pasta.
+
+- Validação desta revisão: 548 testes automatizados aprovados. Não foi possível executar o BAT/PS1 em uma sessão Windows real deste ambiente; a geração dos arquivos e os seus conteúdos foram verificados por testes estáticos.
