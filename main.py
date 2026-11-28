@@ -125,6 +125,7 @@ def _gerar_painel_html(ranking_exportacao, caminho_xlsx, novas, termos_busca, pe
             perfil=perfil,
             metadata={
                 "cidade": filtros.get("cidade", ""),
+                "cidade_candidato": getattr(perfil, "cidade", "") or filtros.get("cidade", ""),
                 "bairro": filtros.get("bairro", ""),
                 "uf": UF_ALVO,
                 "dias_maximo": dias_maximo,
@@ -144,6 +145,7 @@ def _mostrar_central_resultados(salvo: Path, html_salvo: Path | None, args) -> N
     console.print()
     console.print(Panel(
         "[bold green]SUA PESQUISA ESTÁ PRONTA![/bold green]\n\n"
+        f"Todos os arquivos desta pesquisa estão juntos em: [bold white]{escape(str(salvo.parent))}[/bold white]\n\n"
         "Para consultar as oportunidades, abra a [bold cyan]CENTRAL DE RESULTADOS (.BAT)[/bold cyan]:\n"
         f"[bold white]{escape(atalho_bat.name)}[/bold white]\n\n"
         "Dentro dela, escolha como deseja acessar suas vagas:\n"
@@ -168,11 +170,11 @@ def _mostrar_central_resultados(salvo: Path, html_salvo: Path | None, args) -> N
 
     console.print(f"[bold green]Central criada:[/bold green] [cyan]{escape(str(atalho_bat))}[/cyan]")
     # --sim significa execução sem interação; nesse caso apenas mostra o caminho.
-    if args.sim or not getattr(sys.stdin, "isatty", lambda: False)():
+    if getattr(args, "sim", False) or not getattr(sys.stdin, "isatty", lambda: False)():
         console.print("[bold yellow]Dê dois cliques no arquivo .BAT acima para abrir o menu de resultados.[/bold yellow]")
         return
 
-    resposta = console.input("\n[bold yellow]Digite [B] e pressione Enter para abrir a Central agora, ou pressione Enter para encerrar: [/bold yellow]")
+    resposta = console.input("\n[bold yellow]Digite [B] + Enter para abrir a Central agora, ou apenas Enter para encerrar: [/bold yellow]")
     if resposta.strip().casefold() == "b":
         iniciar = getattr(os, "startfile", None)
         if sys.platform == "win32" and callable(iniciar):
@@ -186,13 +188,49 @@ def _mostrar_central_resultados(salvo: Path, html_salvo: Path | None, args) -> N
             console.print("[yellow]A abertura automática está disponível no Windows. Execute o .BAT manualmente neste sistema.[/yellow]")
 
 
+def _resolver_pasta_saida(args) -> Path:
+    """Resolve e cria a pasta única de resultados.
+
+    Por padrão, os quatro artefatos de uma pesquisa ficam em
+    ``<projeto>/Resultados_AchaVAGAI``. ``--saida`` continua permitindo que o
+    usuário escolha outra pasta explicitamente.
+    """
+    informada = getattr(args, "saida", None)
+    if informada:
+        pasta = Path(informada).expanduser()
+        if not pasta.is_absolute():
+            pasta = Path.cwd() / pasta
+    else:
+        pasta = BASE_DIR / _cfg("PASTA_RESULTADOS", "Resultados_AchaVAGAI")
+    pasta.mkdir(parents=True, exist_ok=True)
+    return pasta.resolve()
+
+
+def _novo_caminho_resultado(pasta_saida: Path) -> Path:
+    """Gera nome com segundos e evita sobrescrever uma pesquisa anterior."""
+    base = f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    candidato = pasta_saida / f"{base}.xlsx"
+    sufixo = 2
+    while candidato.exists():
+        candidato = pasta_saida / f"{base}_{sufixo}.xlsx"
+        sufixo += 1
+    return candidato
+
+
 def _gerar_painel_vazio(args, filtros, perfil, termos_busca):
-    """Mesmo uma busca sem resultados gera uma página explicando que não houve vagas."""
-    pasta_saida = Path(args.saida) if args.saida else Path(".")
-    nome_base = pasta_saida / f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}"
-    html_salvo = _gerar_painel_html([], nome_base.with_suffix(".xlsx"), set(), termos_busca, perfil, filtros, None)
+    """Uma busca sem vagas também deixa os quatro artefatos juntos na pasta de resultados."""
+    pasta_saida = _resolver_pasta_saida(args)
+    caminho_xlsx = _novo_caminho_resultado(pasta_saida)
+    salvo = salvar_excel(
+        [], [], caminho_xlsx, termos_busca=termos_busca, perfil=perfil,
+        nota_minima=getattr(args, "nota_minima", None),
+    )
+    html_salvo = _gerar_painel_html([], salvo, set(), termos_busca, perfil, filtros, None)
+    console.print(f"[dim]Resultados salvos na pasta: {escape(str(pasta_saida))}[/dim]")
+    console.print(f"[dim]Planilha vazia: {escape(salvo.name)}[/dim]")
     if html_salvo:
-        console.print(f"[dim]Painel HTML sem resultados salvo em: {escape(str(html_salvo))}[/dim]")
+        console.print(f"[dim]Painel HTML sem resultados: {escape(Path(html_salvo).name)}[/dim]")
+    _mostrar_central_resultados(salvo, html_salvo, args)
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +442,36 @@ def _buscar_na_fonte(nome: str, funcao, termos: list[str]) -> dict:
     # Uma mesma vaga pode aparecer em várias buscas do mesmo portal quando o
     # usuário informa vários cargos. Exibe e devolve a contagem já deduplicada.
     vagas = remover_duplicadas(vagas)
-    return {"nome": nome, "vagas": vagas, "por_termo": por_termo, "erros": erros, "segundos": time.monotonic() - inicio}
+    qualidade = _resumir_qualidade_anuncios(vagas)
+    return {
+        "nome": nome,
+        "vagas": vagas,
+        "por_termo": por_termo,
+        "erros": erros,
+        "segundos": time.monotonic() - inicio,
+        "qualidade": qualidade,
+    }
+
+
+def _resumir_qualidade_anuncios(vagas: list) -> dict[str, int]:
+    """Conta campos ausentes por fonte sem descartar anúncios automaticamente.
+
+    A coleta inicial costuma ter cartões resumidos; descrição/data podem ser
+    enriquecidas depois. Estes números são um indicador de completude recebido
+    do portal, não um juízo definitivo sobre a validade da vaga.
+    """
+    campos = {
+        "sem título": "titulo",
+        "sem empresa": "empresa",
+        "sem local": "cidade",
+        "sem data": "data_publicacao",
+        "sem link": "link",
+        "sem descrição": "descricao",
+    }
+    return {
+        rotulo: sum(not str(getattr(vaga, atributo, "") or "").strip() for vaga in vagas)
+        for rotulo, atributo in campos.items()
+    }
 
 
 def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
@@ -424,6 +491,10 @@ def _relatar_fonte(resultado: dict, varios_termos: bool) -> None:
             estado_fonte = obter_diagnostico(resultado["nome"])
             if estado_fonte.get("status") == "parcial":
                 console.print(f"    [yellow]Consulta parcial:[/yellow] [dim]{escape(estado_fonte.get('detalhe', 'uma ou mais páginas/termos falharam')[:240])}[/dim]")
+        qualidade = resultado.get("qualidade", {})
+        ausentes = [f"{rotulo}: {quantidade}" for rotulo, quantidade in qualidade.items() if quantidade]
+        if ausentes:
+            console.print("    [dim]Completude dos cartões (campos ausentes): " + escape(" · ".join(ausentes)) + "[/dim]")
     else:
         estado = {}
         if obter_diagnostico:
@@ -564,6 +635,16 @@ def exibir_perfil(perfil) -> None:
         tabela.add_row("[bold]Áreas comprovadas:[/bold]", escape(", ".join(perfil.areas_atuacao[:5])))
     if getattr(perfil, "cargos_compativeis", None):
         tabela.add_row("[bold]Cargos compatíveis:[/bold]", escape(", ".join(perfil.cargos_compativeis[:6])))
+    experiencias = getattr(perfil, "experiencias_relevantes", None) or []
+    if experiencias:
+        resumos = []
+        for experiencia in experiencias[:3]:
+            cargo = str(experiencia.get("cargo") or "Cargo não identificado")
+            periodo = str(experiencia.get("periodo") or "período não informado")
+            evidencias = experiencia.get("evidencias") or []
+            prova = str(evidencias[0]) if evidencias else "sem trecho de evidência"
+            resumos.append(f"{cargo} ({periodo}): {prova[:110]}")
+        tabela.add_row("[bold]Experiências verificadas:[/bold]", escape(" | ".join(resumos)))
     if perfil.senioridade:
         tabela.add_row("[bold]Senioridade:[/bold]", escape(perfil.senioridade))
     if perfil.resumo:
@@ -645,7 +726,10 @@ def criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bairro", default=None, help="Bairro (pula a pergunta)")
     parser.add_argument("--cargo", default=None, help="Cargo(s) a buscar, separados por vírgula (pula a pergunta)")
     parser.add_argument("--dias", default=None, help="Idade máxima das vagas, em dias (pula a pergunta)")
-    parser.add_argument("--saida", default=None, help="Pasta onde salvar a planilha Excel (padrão: pasta atual)")
+    parser.add_argument(
+        "--saida", default=None,
+        help="Pasta para todos os resultados (.xlsx, .html, .bat e .ps1); padrão: Resultados_AchaVAGAI dentro do projeto",
+    )
     parser.add_argument("--sem-cache", action="store_true",
                         help="Ignora as notas guardadas de execuções anteriores e pede tudo de novo à IA.")
     parser.add_argument("--sem-analise-profunda", action="store_true",
@@ -784,6 +868,7 @@ def _executar(args) -> None:
 
     if not vagas:
         console.print("[red]Nenhuma vaga passou do filtro de região. Tente ajustar UF_ALVO no config.py.[/red]")
+        _gerar_painel_vazio(args, filtros, perfil, termos_intencao)
         sys.exit(0)
 
     usar_filtro_cnh = bool(_cfg("FILTRAR_POR_HABILITACAO", True) and perfil.cnh)
@@ -792,6 +877,7 @@ def _executar(args) -> None:
         _avisar_descartadas_por_cnh(sem_cnh, perfil.cnh)
         if not vagas:
             console.print("[red]Todas as vagas encontradas exigem uma CNH que o currículo não informa.[/red]")
+            _gerar_painel_vazio(args, filtros, perfil, termos_intencao)
             sys.exit(0)
 
     def regra_depois_da_leitura(vaga) -> str | None:
@@ -932,8 +1018,8 @@ def _executar(args) -> None:
         f"Avaliação: {avaliadas_ia_cache} IA/cache, {somente_local} pontuação local (sem avaliação IA).[/dim]"
     )
 
-    pasta_saida = Path(args.saida) if args.saida else Path(".")
-    nome_arquivo = pasta_saida / f"vagas_encontradas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    pasta_saida = _resolver_pasta_saida(args)
+    nome_arquivo = _novo_caminho_resultado(pasta_saida)
 
     if not ranking:
         console.print(

@@ -28,10 +28,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 import config
 import ia
+from filtros import normalizar_texto
 
 # Muda sempre que as regras do prompt abaixo mudarem. Entra na chave do cache de
 # notas (historico.py), para notas antigas não valerem para regras novas.
-PROMPT_VERSAO = "2026-11-f"
+PROMPT_VERSAO = "2026-11-g"
 
 # Motivo das vagas que NÃO receberam nota da IA (o lote falhou). Elas aparecem no
 # fim da lista com a pontuação local, que não é comparável com a nota da IA.
@@ -336,14 +337,31 @@ def _curriculo_comprova_experiencia_cpd(texto: str) -> bool:
     return False
 
 
-def _revisar_por_evidencia(nota: float, motivo: str, texto_curriculo: str, estat: dict | None = None) -> tuple[float, str]:
-    """Corrige afirmações de experiência ocupacional sem evidência no currículo."""
+def _revisar_por_evidencia(
+    nota: float,
+    motivo: str,
+    texto_curriculo: str,
+    estat: dict | None = None,
+    titulo_vaga: str = "",
+) -> tuple[float, str]:
+    """Corrige afirmações de experiência ocupacional sem evidência no currículo.
+
+    Em vagas cujo próprio título é de condução, também trata como alegação de
+    experiência frases vagas como "experiência em transporte e distribuição".
+    Isso evita converter experiência logística em direção profissional.
+    """
     normal = " ".join((motivo or "").lower().split())
     experiencia = r"\b(experi\w*|hist[oó]rico|atu[aã]c[aã]o|trabalh\w*)\b"
     conducao = r"\b(motorista|condutor|entregador|motoboy|motofretista)\b"
+    cargo_conducao = bool(re.search(conducao, normalizar_texto(titulo_vaga)))
+    transporte = r"\b(transporte|transportes|distribui[cç][aã]o|entregas?|cargas?|passageiros?|dire[cç][aã]o|ve[ií]culos?|rotas?)\b"
     afirma_conducao = bool(
         re.search(experiencia + r".{0,90}" + conducao, normal)
         or re.search(conducao + r".{0,90}" + experiencia, normal)
+        or (
+            cargo_conducao
+            and re.search(experiencia + r".{0,110}" + transporte, normal)
+        )
     )
     if afirma_conducao and not _curriculo_comprova_experiencia_conducao(texto_curriculo):
         if estat is not None:
@@ -380,7 +398,6 @@ def _normalizar_e_alinhar(dados, lote: list[tuple], estat: dict | None = None, t
         if nota is None:
             continue
         motivo = str(item.get("motivo") or item.get("justificativa") or "").strip()
-        nota, motivo = _revisar_por_evidencia(nota, motivo, texto_curriculo, estat)
         destino = indice if indice is not None and 0 <= indice < len(lote) else None
         eco = _palavras_do_titulo(str(item.get("vaga") or item.get("titulo") or ""))
 
@@ -397,6 +414,10 @@ def _normalizar_e_alinhar(dados, lote: list[tuple], estat: dict | None = None, t
                     estat["sem_correspondencia"] += 1
         if destino is None:
             continue
+        titulo_destino = getattr(lote[destino][0], "titulo", "")
+        nota, motivo = _revisar_por_evidencia(
+            nota, motivo, texto_curriculo, estat, titulo_vaga=titulo_destino
+        )
         # duas respostas para a mesma vaga: fica a que a IA numerou direito
         if destino in resultado and (indice_confirmado[destino] or not (indice == destino)):
             continue

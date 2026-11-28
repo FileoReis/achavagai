@@ -301,6 +301,82 @@ def _comprova_experiencia_cpd(texto: str) -> bool:
     return False
 
 
+_STOPWORDS_EVIDENCIA = frozenset({
+    "com", "sem", "para", "por", "das", "dos", "nas", "nos", "uma", "um",
+    "que", "foi", "ser", "ter", "tem", "sua", "seu", "aos", "pela", "pelo",
+    "de", "da", "do", "e", "a", "o", "as", "os", "em", "na", "no",
+})
+
+
+def _cobertura_evidencia(evidencia: str, texto_curriculo: str) -> float:
+    """Mede quanto do conteúdo de uma evidência aparece no texto original.
+
+    Primeiro tenta uma correspondência literal após normalização. Como PDFs podem
+    quebrar linhas e pontuação, aceita também alta cobertura de tokens de conteúdo;
+    trechos muito curtos nunca são aceitos só por coincidência de uma palavra.
+    """
+    trecho = normalizar_texto(evidencia)
+    base = normalizar_texto(texto_curriculo)
+    if not trecho or not base:
+        return 0.0
+    if trecho in base:
+        return 1.0
+    tokens = [t for t in trecho.split() if len(t) >= 3 and t not in _STOPWORDS_EVIDENCIA]
+    if len(tokens) < 3:
+        return 0.0
+
+    # Não basta que as palavras apareçam em qualquer lugar do currículo: isso
+    # poderia validar uma frase inventada pela IA a partir de termos dispersos.
+    # Procura uma sequência na mesma vizinhança, tolerando pequenas omissões do PDF.
+    base_tokens = base.split()
+    melhor = 0
+    limite_janela = max(len(tokens) + 3, int(len(tokens) * 1.8))
+    for inicio, token_inicial in enumerate(base_tokens):
+        if token_inicial != tokens[0]:
+            continue
+        indice_base = inicio
+        encontrados = 1
+        for token in tokens[1:]:
+            fim_janela = min(len(base_tokens), indice_base + 4)
+            try:
+                proximo = base_tokens.index(token, indice_base + 1, fim_janela)
+            except ValueError:
+                continue
+            encontrados += 1
+            indice_base = proximo
+        if indice_base - inicio + 1 <= limite_janela:
+            melhor = max(melhor, encontrados)
+    return melhor / len(tokens)
+
+
+def _validar_experiencias_extraidas(perfil: PerfilCandidato, texto: str) -> None:
+    """Mantém experiências da IA somente quando ela fornece trecho ancorado no PDF."""
+    validadas = []
+    for experiencia in perfil.experiencias_relevantes:
+        evidencias = experiencia.get("evidencias") or []
+        evidencias_validas = [
+            trecho for trecho in evidencias
+            if _cobertura_evidencia(trecho, texto) >= 0.82
+        ]
+        if not evidencias_validas:
+            cargo = experiencia.get("cargo") or "experiência sem cargo identificado"
+            perfil.avisos_evidencia.append(
+                f"Experiência '{cargo}' não foi considerada: a IA não apresentou um trecho comprovável no currículo."
+            )
+            continue
+
+        experiencia_validada = dict(experiencia)
+        experiencia_validada["evidencias"] = evidencias_validas[:3]
+        atividades = experiencia_validada.get("atividades") or []
+        atividades_validas = [
+            atividade for atividade in atividades
+            if _cobertura_evidencia(atividade, texto) >= 0.55
+        ]
+        experiencia_validada["atividades"] = atividades_validas[:5]
+        validadas.append(experiencia_validada)
+    perfil.experiencias_relevantes = validadas
+
+
 def _cargo_e_de_conducao(texto: str) -> bool:
     return bool(_TERMOS_CONDUCAO.search(normalizar_texto(texto)))
 
@@ -313,6 +389,7 @@ def _validar_perfil_por_evidencias(perfil: PerfilCandidato, cargo_local: str | N
     em CPD. Esta validação é local e não depende da resposta da IA.
     """
     texto = perfil.texto_para_ia or perfil.texto_completo
+    _validar_experiencias_extraidas(perfil, texto)
     perfil.experiencia_conducao_comprovada = _comprova_experiencia_conducao(texto)
     perfil.objetivo_conducao_declarado = _declara_objetivo_conducao(texto)
     perfil.experiencia_cpd_comprovada = _comprova_experiencia_cpd(texto)
@@ -348,6 +425,10 @@ def _validar_perfil_por_evidencias(perfil: PerfilCandidato, cargo_local: str | N
         perfil.experiencias_relevantes = [
             e for e in perfil.experiencias_relevantes
             if "cpd" not in normalizar_texto(e.get("cargo", ""))
+        ]
+        perfil.areas_atuacao = [
+            area for area in perfil.areas_atuacao
+            if "cpd" not in normalizar_texto(area)
         ]
         if len(antes) != len(perfil.cargos_compativeis):
             perfil.avisos_evidencia.append(

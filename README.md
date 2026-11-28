@@ -98,11 +98,15 @@ O ranking recebe esse contexto e diferencia experiência direta de habilidade tr
 
 A intenção da busca também é conferida no título e na descrição. CPD é tratado como Central de Processamento de Dados; a sigla PCD, de pessoa com deficiência, não é considerada correspondência de CPD. Dados de cidade/empresa não bastam para classificar uma vaga como correspondente ao cargo.
 
-A análise por IA não deve ser tratada como garantia de contratação ou de exatidão absoluta. Confira a descrição original e os requisitos antes de se candidatar.
+A análise por IA não deve ser tratada como garantia de contratação ou de exatidão absoluta. Confira a descrição original e os requisitos antes de se candidatar. O parser valida os trechos de evidência devolvidos pela IA contra o texto efetivamente extraído do PDF; palavras isoladas espalhadas em partes diferentes do currículo não bastam para comprovar uma experiência profissional.
 
-## 6. Resultados e planilha Excel
+Durante a coleta, o terminal também mostra um resumo de completude dos cartões de cada fonte (campos sem título, empresa, local, data, link ou descrição). Esse indicador ajuda a comparar a qualidade dos dados recebidos sem descartar automaticamente anúncios que podem ser enriquecidos depois pela página completa.
 
-O programa remove duplicatas, verifica datas e requisitos, classifica as vagas e cria `vagas_encontradas_AAAAMMDD_HHMM.xlsx`.
+## 6. Pasta de resultados, planilha Excel e painel HTML
+
+O programa remove duplicatas, verifica datas e requisitos, classifica as vagas e cria, por padrão, a pasta `Resultados_AchaVAGAI` na raiz do projeto. Cada execução salva nela os quatro arquivos da pesquisa: `.xlsx`, `.html`, `.bat` e `.ps1`. Isso mantém os resultados separados do código-fonte e evita espalhar arquivos na pasta principal.
+
+Use `--saida "C:\\caminho\\para\\Resultados"` para escolher outra pasta. O parâmetro controla a pasta de todos os quatro artefatos, não apenas da planilha. Mesmo quando a busca não encontra vagas elegíveis, o programa gera uma planilha/painel vazios e a Central de Resultados para mostrar claramente que a consulta terminou sem oportunidades.
 
 A planilha organiza os resultados em abas:
 
@@ -117,7 +121,7 @@ A planilha organiza os resultados em abas:
 
 Os links da coluna `Link` continuam sendo hyperlinks externos HTTPS normais no XLSX. A planilha não consegue definir qual aplicativo o Windows usa para abrir HTTP/HTTPS. Se clicar no link abrir o Explorador/Documentos, configure Google Chrome como aplicativo padrão para os protocolos HTTP e HTTPS em Configurações do Windows > Aplicativos > Aplicativos padrão.
 
-Ao lado de cada planilha é criado `abrir_links_chrome_<nome-da-planilha>.bat` e um arquivo `.ps1` correspondente. Ao terminar uma busca interativa, o próprio AchaVagAI mostra o nome da Central e oferece `B` + Enter para abri-la imediatamente. Também é possível dar dois cliques no `.bat` depois. A central colorida oferece:
+Ao lado de cada planilha é criado `abrir_links_chrome_<nome-da-planilha>.bat` e um arquivo `.ps1` correspondente. Ao terminar uma busca interativa, o próprio AchaVagAI mostra a pasta onde os resultados foram salvos e oferece `B` + Enter para abrir a Central imediatamente. Também é possível dar dois cliques no `.bat` depois. A central colorida oferece:
 
 1. **Abrir uma vaga pelo número** — mostra a lista numerada e abre somente a vaga escolhida no Chrome.
 2. **Abrir a planilha Excel (.xlsx)** — abre o arquivo no Excel ou no aplicativo padrão do Windows.
@@ -158,7 +162,7 @@ Execute localmente:
 python -m pytest -q
 ```
 
-A suíte atual contém **548 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
+A suíte atual contém **573 testes automatizados**, executados sem acessar os sites nem consumir chaves de IA. Os testes simulam respostas HTML/JSON, erros HTTP, respostas Gemini e geração do Excel. Eles validam a lógica, mas não substituem uma verificação ao vivo dos portais nem garantem disponibilidade externa.
 
 ## 9. Estrutura
 
@@ -180,9 +184,14 @@ O leitor `pdfplumber` é carregado sob demanda, somente quando o currículo é a
 
 ## Painel visual HTML
 
-Ao terminar uma pesquisa, o AchaVagAI gera automaticamente um arquivo `vagas_encontradas_<data-hora>.html` ao lado da planilha Excel. Abra-o com dois cliques no navegador. O painel é autocontido e funciona localmente, sem servidor, hospedagem, CDN ou conexão externa para carregar a interface.
+Ao terminar uma pesquisa, o AchaVagAI gera automaticamente um arquivo `vagas_encontradas_<data-hora>.html` na pasta `Resultados_AchaVAGAI` (ou na pasta indicada por `--saida`), junto da planilha Excel e dos atalhos BAT/PS1. Abra-o com dois cliques no navegador. O painel é autocontido e funciona localmente, sem servidor, hospedagem, CDN ou conexão externa para carregar a interface.
 
 O painel HTML tem identidade visual premium, responsiva e autocontida, com pesquisa por texto, filtro por fonte, categorias, ordenação, cartões com pontuação/origem da nota, descrição e links para o anúncio. **Seu conjunto de vagas espelha exatamente a primeira aba `Vagas` do Excel**: apenas publicações com data interpretável. Anúncios sem data não aparecem no HTML e permanecem exclusivamente na aba `Data não confirmada` do workbook. Excel e HTML compartilham o mesmo seletor de registros para evitar divergência. Notas de similaridade local ficam identificadas separadamente das avaliações IA/cache. O HTML não inclui currículo, nome do candidato, chaves API ou histórico pessoal.
 
 ### Correção do menu de links no Chrome
 O atalho `.bat` chama o `.ps1` correspondente. O menu agora lê um objeto JSON por linha e valida título/URL como valores escalares. Ao escolher um número, somente o link daquele registro é enviado ao Chrome. Se você tiver atalhos antigos que exibem `System.Object[]`, gere uma nova planilha para criar novos arquivos `.bat` e `.ps1` corrigidos; não é necessário editar o atalho antigo manualmente.
+
+
+## Plataforma pessoal de carreira (SQLite + consultor + geografia)
+
+Consulte `MUDANCAS_2026-11-28_PLATAFORMA.md` para abrir o dashboard interativo pela Central de Resultados, manter o acompanhamento em SQLite, filtrar por modalidade/salário/distância, clicar nos municípios do mapa, consultar o histórico de pesquisas e usar o consultor de requisitos. O servidor usa apenas `127.0.0.1`; o consultor IA só envia dados profissionais minimizados e descrição da vaga quando acionado.

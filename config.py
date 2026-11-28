@@ -32,6 +32,10 @@ QUANTIDADE_ANALISE_PROFUNDA = 25
 # Deixe False para uma saída mais limpa no dia a dia.
 MODO_DETALHADO = False
 
+# Todos os artefatos de uma pesquisa concluída (XLSX, HTML, BAT e PS1) ficam
+# agrupados nesta pasta dentro do projeto. Pode ser substituída com --saida.
+PASTA_RESULTADOS = "Resultados_AchaVAGAI"
+
 # Cidades/municípios comumente usados nas vagas da região do Rio de Janeiro.
 # Usado como apoio para o parser do currículo tentar identificar a cidade do candidato.
 CIDADES_RJ = [

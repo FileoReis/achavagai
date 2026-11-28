@@ -236,16 +236,24 @@ def _gerar_atalho_chrome(caminho_xlsx: Path, ranking: list[tuple]) -> tuple[Path
     payload = base64.b64encode(payload_texto.encode("utf-8")).decode("ascii")
     html_nome_b64 = base64.b64encode(caminho_html.name.encode("utf-8")).decode("ascii")
     xlsx_nome_b64 = base64.b64encode(caminho_xlsx.name.encode("utf-8")).decode("ascii")
+    data_nome_b64 = base64.b64encode(caminho_xlsx.with_suffix(".json").name.encode("utf-8")).decode("ascii")
+    app_script_b64 = base64.b64encode(str(Path(__file__).with_name("painel_local.py").resolve()).encode("utf-8")).decode("ascii")
 
     ps1 = r"""$ErrorActionPreference = 'Stop'
 $encoded = '__PAYLOAD__'
 $htmlNameEncoded = '__HTML_NAME__'
 $xlsxNameEncoded = '__XLSX_NAME__'
+$dataNameEncoded = '__DATA_NAME__'
+$appScriptEncoded = '__APP_SCRIPT__'
 $raw = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encoded))
 $htmlName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($htmlNameEncoded))
 $xlsxName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($xlsxNameEncoded))
+$dataName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($dataNameEncoded))
+$appScript = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($appScriptEncoded))
 $painelHtml = Join-Path $PSScriptRoot $htmlName
 $planilhaXlsx = Join-Path $PSScriptRoot $xlsxName
+$dadosPainel = Join-Path $PSScriptRoot $dataName
+$bancoCarreira = Join-Path $PSScriptRoot 'carreira.sqlite3'
 
 # Cada linha contém exatamente um objeto JSON: uma escolha abre uma única vaga.
 $links = [System.Collections.Generic.List[object]]::new()
@@ -336,8 +344,8 @@ while (-not $sair) {
     Write-Host '      Abre todas as abas, filtros e links no Excel ou app padrão.' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  [3] ' -NoNewline -ForegroundColor Magenta
-    Write-Host 'ABRIR O PAINEL VISUAL NO NAVEGADOR (.HTML)' -ForegroundColor White
-    Write-Host '      Painel premium com pesquisa, filtros e cartões de vagas.' -ForegroundColor DarkGray
+    Write-Host 'ABRIR A PLATAFORMA INTERATIVA DE CARREIRA' -ForegroundColor White
+    Write-Host '      Dashboard, favoritos, candidaturas, comparacao e consultor IA.' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  [4] ' -NoNewline -ForegroundColor DarkYellow
     Write-Host 'ABRIR A PASTA DESTA PESQUISA' -ForegroundColor White
@@ -403,6 +411,21 @@ while (-not $sair) {
                 Read-Host 'Pressione Enter para voltar'
                 continue
             }
+            if ((Test-Path -LiteralPath $appScript) -and (Test-Path -LiteralPath $dadosPainel)) {
+                $python = Get-Command 'python.exe' -ErrorAction SilentlyContinue
+                if (-not $python) { $python = Get-Command 'python' -ErrorAction SilentlyContinue }
+                if ($python -and $python.Source) {
+                    $chrome = Get-ChromePath
+                    $argumentos = '"{0}" --html "{1}" --data "{2}" --db "{3}"' -f $appScript, $painelHtml, $dadosPainel, $bancoCarreira
+                    if ($chrome) { $argumentos += ' --browser "{0}"' -f $chrome }
+                    Start-Process -FilePath $python.Source -ArgumentList $argumentos -WorkingDirectory (Split-Path -Parent $appScript)
+                    Write-Host 'Plataforma local iniciada: acompanhamentos, favoritos, comparacao e consultor.' -ForegroundColor Green
+                    Write-Host 'Uma nova janela do Python ficara aberta enquanto o painel estiver em uso.' -ForegroundColor DarkGray
+                    Start-Sleep -Milliseconds 1200
+                    continue
+                }
+                Write-Host 'Python nao encontrado. Abrindo o HTML estatico, sem SQLite/IA sob demanda.' -ForegroundColor Yellow
+            }
             $caminhoCompleto = (Resolve-Path -LiteralPath $painelHtml).Path
             $urlHtml = ([System.Uri]$caminhoCompleto).AbsoluteUri
             if (Abrir-NoChrome $urlHtml 'painel') {
@@ -425,7 +448,7 @@ while (-not $sair) {
 Write-Host ''
 Write-Host 'Obrigado por usar o AchaVagAI.' -ForegroundColor Cyan
 Start-Sleep -Milliseconds 500
-""".replace("__PAYLOAD__", payload).replace("__HTML_NAME__", html_nome_b64).replace("__XLSX_NAME__", xlsx_nome_b64)
+""".replace("__PAYLOAD__", payload).replace("__HTML_NAME__", html_nome_b64).replace("__XLSX_NAME__", xlsx_nome_b64).replace("__DATA_NAME__", data_nome_b64).replace("__APP_SCRIPT__", app_script_b64)
 
     bat = f'''@echo off
 setlocal EnableExtensions
@@ -443,7 +466,7 @@ echo   Escolha como deseja consultar suas oportunidades:
 echo.
 echo     [1] Vaga individual pelo numero
 echo     [2] Planilha Excel (.xlsx)
-echo     [3] Painel visual no navegador (.html)
+echo     [3] Plataforma interativa de carreira (dashboard + acompanhamento)
 echo     [4] Pasta desta pesquisa
 echo     [0] Sair
 echo.
