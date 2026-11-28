@@ -172,3 +172,24 @@
 - O atalho continua sendo criado mesmo quando a pesquisa não tem links externos válidos, permitindo abrir a planilha, o painel ou a pasta.
 
 - Validação desta revisão: 548 testes automatizados aprovados. Não foi possível executar o BAT/PS1 em uma sessão Windows real deste ambiente; a geração dos arquivos e os seus conteúdos foram verificados por testes estáticos.
+
+
+## 28/11/2026 — Pasta de resultados, evidências e qualidade das fontes
+
+- A saída padrão é agrupada em `Resultados_AchaVAGAI`; planilha, painel HTML e atalhos BAT/PS1 são criados na mesma pasta. `--saida` continua permitindo escolher outro destino. Nomes incluem segundos e sufixo para evitar sobrescrita.
+- Ao concluir, o modo interativo oferece `B` + Enter para abrir imediatamente a Central `.bat`; execuções `--sim` e sem terminal interativo apenas exibem o caminho. Buscas sem resultado também deixam os quatro artefatos vazios disponíveis.
+- A extração de experiências do currículo exige evidência textual localizada no PDF. A correspondência flexível agora preserva a ordem e proximidade dos termos; palavras isoladas espalhadas pelo documento não validam uma afirmação inventada.
+- Justificativas de vagas de condução não podem converter logística/distribuição em experiência profissional como motorista sem evidência.
+- Cada fonte passa a informar a completude dos cartões recebidos: ausência de título, empresa, local, data, link e descrição. Os contadores são diagnósticos, não filtros de descarte.
+- Testes: 556 testes automatizados aprovados. A suíte não acessa portais reais nem consome chaves de IA.
+
+## 2026-11-28 — Plataforma local de carreira
+
+- Dashboard com mapa esquemático clicável; selecionar um município no mapa aplica o filtro de cidade.
+- Filtros por modalidade explicitamente identificada, presença de salário, etapa de candidatura, favoritos, cidade e faixa de distância.
+- Ação para limpar todos os filtros.
+- Histórico persistente de pesquisas no SQLite, sem duplicar a mesma execução ao reabrir o painel.
+- Histórico de oportunidades antigas limitado a vagas realmente acompanhadas (favoritas, status alterado ou com notas).
+- Cache do consultor invalidado por mudanças relevantes no conteúdo da vaga.
+- Análise local identifica múltiplas categorias de CNH informadas em um anúncio.
+- 573 testes automatizados aprovados; JavaScript validado com `node --check`; CSS sem erros de parsing.

@@ -302,6 +302,27 @@ def test_justificativa_de_cpd_sem_evidencia_e_corrigida():
     assert "CPD não está comprovada" in motivo
 
 
+def test_vaga_de_motorista_nao_herda_experiencia_generica_em_distribuicao():
+    nota, motivo = matcher._revisar_por_evidencia(
+        92,
+        "Possui experiência prévia em transporte e distribuição, além de CNH B.",
+        "CNH A e B. Logística, estoque e distribuição.",
+        {},
+        titulo_vaga="Motorista de Entrega",
+    )
+    assert nota == 68
+    assert "experiência profissional como motorista não está comprovada" in motivo
+
+
+def test_experiencia_em_logistica_nao_e_penalizada_em_vaga_logistica():
+    motivo_original = "Experiência prévia em transporte e distribuição, com controle de estoque."
+    nota, motivo = matcher._revisar_por_evidencia(
+        82, motivo_original, "Logística, estoque e distribuição.", {},
+        titulo_vaga="Assistente de Logística",
+    )
+    assert nota == 82 and motivo == motivo_original
+
+
 def test_ranking_completo_preserva_vagas_fora_do_limite_da_ia(vaga, com_ia, monkeypatch):
     monkeypatch.setattr(config, "IA_TOP_ANALISE", 1)
     vagas = [vaga(titulo=f"Vaga {i}", descricao="controle de estoque e atendimento") for i in range(5)]

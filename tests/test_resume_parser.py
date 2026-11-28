@@ -175,3 +175,74 @@ def test_validacao_remove_motorista_e_cpd_sem_evidencia():
     assert "Logística e Distribuição" in p.areas_atuacao
     assert not p.experiencia_conducao_comprovada
     assert not p.experiencia_cpd_comprovada
+
+
+def test_experiencias_da_ia_exigem_evidencia_ancorada_no_pdf():
+    from resume_parser import PerfilCandidato, _validar_perfil_por_evidencias
+    texto = (
+        "Experiência profissional\n"
+        "Auxiliar administrativo na Loja Modelo (2019-2023)\n"
+        "Atendimento ao cliente, controle de estoque e planilhas em Excel avançado.\n"
+        "CNH categoria B\nLogística e distribuição."
+    )
+    p = PerfilCandidato(
+        texto_completo=texto,
+        texto_para_ia=texto,
+        cargo_sugerido="Auxiliar Administrativo",
+        experiencias_relevantes=[
+            {
+                "cargo": "Auxiliar administrativo",
+                "periodo": "2019-2023",
+                "atividades": ["Controle de estoque", "Condução profissional de veículos"],
+                "evidencias": [
+                    "Auxiliar administrativo na Loja Modelo (2019-2023)",
+                    "Esta pessoa dirigia caminhões diariamente na distribuição.",
+                ],
+            }
+        ],
+    )
+    _validar_perfil_por_evidencias(p, "Auxiliar Administrativo")
+    assert len(p.experiencias_relevantes) == 1
+    experiencia = p.experiencias_relevantes[0]
+    assert experiencia["evidencias"] == ["Auxiliar administrativo na Loja Modelo (2019-2023)"]
+    assert experiencia["atividades"] == ["Controle de estoque"]
+    assert any("evidência" in aviso.lower() for aviso in p.avisos_evidencia) is False
+
+
+def test_experiencia_inventada_sem_evidencia_e_removida():
+    from resume_parser import PerfilCandidato, _validar_perfil_por_evidencias
+    texto = "CNH categoria B\nLogística e distribuição\nControle de estoque"
+    p = PerfilCandidato(
+        texto_completo=texto,
+        texto_para_ia=texto,
+        cargo_sugerido="Gerente Operacional",
+        experiencias_relevantes=[
+            {
+                "cargo": "Motorista de Carga",
+                "periodo": "2020-2023",
+                "atividades": ["Entrega de mercadorias"],
+                "evidencias": ["Atuação profissional como motorista de carga na Empresa X"],
+            }
+        ],
+    )
+    _validar_perfil_por_evidencias(p, "Gerente Operacional")
+    assert p.experiencias_relevantes == []
+    assert any("não foi considerada" in aviso for aviso in p.avisos_evidencia)
+
+
+def test_evidencia_nao_e_validada_por_palavras_espalhadas_no_curriculo():
+    from resume_parser import _cobertura_evidencia
+    texto = (
+        "Atuou em atendimento ao cliente e suporte administrativo.\n"
+        "CNH categoria B.\n"
+        "Logística, carga de produtos, controle de estoque e contato com empresa."
+    )
+    evidencia = "Atuou como motorista profissional de carga na empresa X"
+    assert _cobertura_evidencia(evidencia, texto) < 0.82
+
+
+def test_evidencia_continua_aceitando_trecho_com_quebra_de_linha_e_pontuacao():
+    from resume_parser import _cobertura_evidencia
+    texto = "Experiência profissional: Auxiliar administrativo na Loja Modelo.\nPeríodo 2019-2023."
+    evidencia = "Auxiliar administrativo na Loja Modelo (2019-2023)"
+    assert _cobertura_evidencia(evidencia, texto) >= 0.82

@@ -222,7 +222,7 @@ def test_menu_amigavel_inclui_atalho_direto_para_painel_html(tmp_path, vaga):
 
     assert "ABRIR UMA VAGA PELO NUMERO" in ps1
     assert "ABRIR A PLANILHA EXCEL (.XLSX)" in ps1
-    assert "ABRIR O PAINEL VISUAL NO NAVEGADOR (.HTML)" in ps1
+    assert "ABRIR A PLATAFORMA INTERATIVA DE CARREIRA" in ps1
     assert "ABRIR A PASTA DESTA PESQUISA" in ps1
     assert "$painelHtml = Join-Path $PSScriptRoot $htmlName" in ps1
     assert "$planilhaXlsx = Join-Path $PSScriptRoot $xlsxName" in ps1
@@ -238,7 +238,7 @@ def test_menu_amigavel_inclui_atalho_direto_para_painel_html(tmp_path, vaga):
     assert base64.b64decode(encoded_html).decode("utf-8") == "painel.html"
     assert base64.b64decode(encoded_xlsx).decode("utf-8") == "painel.xlsx"
     assert "[2] Planilha Excel (.xlsx)" in bat
-    assert "[3] Painel visual no navegador (.html)" in bat
+    assert "[3] Plataforma interativa de carreira (dashboard + acompanhamento)" in bat
 
 
 
@@ -250,5 +250,5 @@ def test_cria_central_mesmo_sem_links_validos_para_abrir_excel_html_e_pasta(tmp_
     assert bat.is_file() and ps1.is_file()
     conteudo = ps1.read_text(encoding="utf-8-sig")
     assert "ABRIR A PLANILHA EXCEL (.XLSX)" in conteudo
-    assert "ABRIR O PAINEL VISUAL NO NAVEGADOR (.HTML)" in conteudo
+    assert "ABRIR A PLATAFORMA INTERATIVA DE CARREIRA" in conteudo
     assert "Nenhum link de candidatura valido" in conteudo

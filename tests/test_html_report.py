@@ -158,3 +158,71 @@ def test_painel_visual_tem_identidade_premium_e_layout_movel(tmp_path, vaga):
     assert "@media(max-width:720px)" in texto
     assert "opportunity-card" in texto
     assert "https://fonts.googleapis.com" not in texto
+
+
+def test_painel_interativo_expoe_filtros_distancia_perfil_e_historico(tmp_path, vaga):
+    v = vaga(titulo="Motorista B", empresa="Empresa A", cidade="Niterói", data_publicacao="hoje",
+             link="https://example.com/motorista", descricao="Entrega e transporte", fonte="Portal A")
+    perfil = type("Perfil", (), {
+        "cidade": "Rio de Janeiro", "cargo_sugerido": "Supervisor Operacional", "senioridade": "supervisor",
+        "areas_atuacao": ["Logística"], "habilidades": ["Controle de estoque"],
+        "experiencias_relevantes": [], "formacao": [], "cnh": ("A", "B"),
+        "nome": "DADO PESSOAL NÃO PUBLICAR",
+    })()
+    destino = gerar_html([(v, 88, "Compatibilidade local")], tmp_path / "interativo.html",
+                         perfil=perfil, metadata={"cidade_candidato": "Rio de Janeiro"})
+    texto = destino.read_text(encoding="utf-8")
+    dados = destino.with_suffix(".json").read_text(encoding="utf-8")
+    assert 'id="distance-filter"' in texto
+    assert 'data-role="history"' in texto
+    assert "toggleHistory(card)" in texto
+    assert "renderPreviousJobs(data.items||{})" in texto
+    assert "Comparar oportunidades" in texto
+    assert "Seu perfil profissional" in texto or "SEU PERFIL PROFISSIONAL" in texto
+    assert "DADO PESSOAL NÃO PUBLICAR" not in texto
+    assert "DADO PESSOAL NÃO PUBLICAR" not in dados
+    assert 'data-distance="' in texto
+
+
+def test_painel_tem_filtros_modalidade_salario_e_mapa_clicavel(tmp_path, vaga):
+    v = vaga(titulo="Analista de Suporte", empresa="Empresa", cidade="Niterói", data_publicacao="hoje",
+             link="https://example.com/remoto", descricao="Trabalho 100% remoto e suporte técnico.", fonte="Portal")
+    texto = gerar_html([(v, 90, "Experiência relacionada.")], tmp_path / "filtros.html",
+                       metadata={"cidade_candidato": "Rio de Janeiro"}).read_text(encoding="utf-8")
+    assert 'id="modality-filter"' in texto
+    assert 'id="salary-filter"' in texto
+    assert 'data-modality="Remoto"' in texto
+    assert 'data-has-salary="0"' in texto
+    assert 'class="map-point" data-city="Niterói"' in texto
+    assert "point.addEventListener('click',selectCity)" in texto
+    assert "point.addEventListener('keydown'" in texto
+    assert "clear-filters" in texto
+
+
+def test_painel_tem_historico_persistente_e_apenas_oportunidades_acompanhadas(tmp_path, vaga):
+    v = vaga(titulo="Técnico de TI", data_publicacao="hoje", link="https://example.com/ti")
+    texto = gerar_html([(v, 88, "Análise")], tmp_path / "history.html").read_text(encoding="utf-8")
+    assert 'id="research-history"' in texto
+    assert "renderResearchHistory" in texto
+    assert "/api/research-history" in texto
+    assert "!byId.has(id)&&(!!item.favorite" in texto
+    assert "Oportunidades acompanhadas de pesquisas anteriores" in texto
+
+
+def test_modalidade_so_e_classificada_com_indicacao_explicita(vaga):
+    from html_report import _inferir_modalidade
+    remota = vaga(titulo="Analista de TI", descricao="A vaga é 100% remota.")
+    treinamento = vaga(titulo="Analista de TI", descricao="Treinamento remoto será oferecido na admissão.")
+    hibrida = vaga(titulo="Analista de TI", descricao="Regime híbrido, três dias no escritório.")
+    assert _inferir_modalidade(remota) == "Remoto"
+    assert _inferir_modalidade(treinamento) == "Não informada"
+    assert _inferir_modalidade(hibrida) == "Híbrido"
+
+
+def test_painel_persiste_preferencias_de_filtro_no_navegador(tmp_path, vaga):
+    v = vaga(titulo="Técnico de TI", data_publicacao="hoje", link="https://example.com/ti")
+    texto = gerar_html([(v, 88, "Análise")], tmp_path / "prefs.html").read_text(encoding="utf-8")
+    assert "achavagai-painel-preferencias-v1" in texto
+    assert "restoreUiPreferences()" in texto
+    assert "saveUiPreferences()" in texto
+    assert "Limpar filtros" in texto

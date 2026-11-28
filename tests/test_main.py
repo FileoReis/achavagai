@@ -191,6 +191,11 @@ def test_nenhuma_vaga_na_busca_termina_sem_erro(app):
     with pytest.raises(SystemExit) as saida:
         app.rodar("--sem-ia", cargo="CPD")
     assert saida.value.code == 0 and "Nenhuma vaga encontrada" in app.texto
+    pasta = app.tmp / "saida"
+    assert len(list(pasta.glob("vagas_encontradas_*.xlsx"))) == 1
+    assert len(list(pasta.glob("vagas_encontradas_*.html"))) == 1
+    assert len(list(pasta.glob("abrir_links_chrome_*.bat"))) == 1
+    assert len(list(pasta.glob("abrir_links_chrome_*.ps1"))) == 1
 
 
 def test_nota_minima_alta_ainda_salva_tudo_o_que_foi_avaliado(cenario):
@@ -405,7 +410,28 @@ def test_se_todas_as_vagas_estao_encerradas_o_programa_avisa_e_para(app):
         app.rodar("--sem-ia", cargo="CPD")
     assert saida.value.code == 0
     assert "Todas as vagas encontradas já estavam encerradas" in app.texto
-    assert not list((app.tmp / "saida").glob("*.xlsx"))
+    # Mesmo sem vagas ativas, os quatro artefatos ficam agrupados na pasta de resultados.
+    assert len(list((app.tmp / "saida").glob("*.xlsx"))) == 1
+    assert len(list((app.tmp / "saida").glob("*.html"))) == 1
+    assert len(list((app.tmp / "saida").glob("*.bat"))) == 1
+    assert len(list((app.tmp / "saida").glob("*.ps1"))) == 1
+
+
+def test_pasta_padrao_de_resultados_fica_separada_da_raiz_do_projeto(app):
+    app.fontes["wordpress"] = [
+        app.v(titulo="Auxiliar Administrativo Alta", empresa="Empresa A",
+              cidade="Rio de Janeiro, RJ", link="https://portal.exemplo/adm",
+              data_publicacao="hoje", descricao="Rotinas administrativas e atendimento."),
+    ]
+    main.main([
+        PDF, "--sim", "--sem-ia", "--sem-analise-profunda",
+        "--cidade", "Rio de Janeiro", "--cargo", "auxiliar administrativo", "--dias", "30",
+    ])
+    pasta = app.tmp / config.PASTA_RESULTADOS
+    assert pasta.is_dir()
+    for padrao in ("*.xlsx", "*.html", "*.bat", "*.ps1"):
+        assert len(list(pasta.glob(padrao))) == 1, padrao
+    assert not list(app.tmp.glob("vagas_encontradas_*.xlsx"))
 
 
 def test_main_lembra_o_modelo_da_ia_na_pasta_do_projeto(app):
@@ -556,3 +582,25 @@ def test_opcao_b_da_mensagem_final_abre_o_bat_no_windows(tmp_path, monkeypatch):
     assert aberta == [str(bat)]
     assert "CENTRAL DE RESULTADOS (.BAT)" in tela.getvalue()
     assert "Central de resultados aberta em uma nova janela" in tela.getvalue()
+
+
+def test_coleta_exibe_completude_dos_cartoes_por_fonte(app):
+    vaga = app.v(
+        titulo="Auxiliar de CPD",
+        empresa="",
+        cidade="Rio de Janeiro, RJ",
+        data_publicacao="",
+        link="https://portal.exemplo/cpd",
+        descricao="",
+        fonte="Portal teste",
+    )
+    resultado = main._buscar_na_fonte("Portal teste", lambda termo: [vaga], ["CPD"])
+    assert resultado["qualidade"]["sem empresa"] == 1
+    assert resultado["qualidade"]["sem data"] == 1
+    assert resultado["qualidade"]["sem descrição"] == 1
+    assert resultado["qualidade"]["sem link"] == 0
+
+    main._relatar_fonte(resultado, varios_termos=False)
+    assert "Completude dos cartões" in app.texto
+    assert "sem data: 1" in app.texto
+    assert "sem empresa: 1" in app.texto
